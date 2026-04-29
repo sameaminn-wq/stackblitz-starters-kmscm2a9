@@ -1,20 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { InventoryAnalysisResult, ProductItem } from "../types";
 
 // 1. إعداد محرك الذكاء الاصطناعي العالمي (Enterprise Configuration)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-// الحد الأقصى لحجم الصورة المسموح به (5MB) بالبايت
-const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
-
 /**
  * نظام استخبارات الموقع - يحدد السياق الجغرافي والمالي واللغوي تلقائياً
- * @param request - كائن NextRequest الذي يحتوي على معلومات الطلب.
- * @returns كائن يحتوي على اسم البلد، العملة، واللغة بناءً على رأس 'x-vercel-ip-country'.
  */
 function getGlobalContext(request: NextRequest) {
-  const countryCode = request.headers.get("x-vercel-ip-country") || "US"; // الافتراضي للولايات المتحدة
+  const countryCode = request.headers.get("x-vercel-ip-country") || "EG";
   
   const localeMap: Record<string, { name: string; currency: string; lang: string }> = {
     "SA": { name: "المملكة العربية السعودية", currency: "SAR", lang: "العربية" },
@@ -22,47 +16,24 @@ function getGlobalContext(request: NextRequest) {
     "AE": { name: "الإمارات", currency: "AED", lang: "العربية/English" },
     "KW": { name: "الكويت", currency: "KWD", lang: "العربية" },
     "QA": { name: "قطر", currency: "QAR", lang: "العربية" },
-    "US": { name: "الولايات المتحدة الأمريكية", currency: "USD", lang: "English" },
-    "GB": { name: "المملكة المتحدة", currency: "GBP", lang: "English" },
-    "DE": { name: "ألمانيا", currency: "EUR", lang: "Deutsch" },
-    "FR": { name: "فرنسا", currency: "EUR", lang: "Français" },
-    "IT": { name: "إيطاليا", currency: "EUR", lang: "Italiano" },
-    "ES": { name: "إسبانيا", currency: "EUR", lang: "Español" },
-    "JP": { name: "اليابان", currency: "JPY", lang: "日本語" },
-    "CN": { name: "الصين", currency: "CNY", lang: "中文" },
-    "IN": { name: "الهند", currency: "INR", lang: "English/हिन्दी" },
-    "BR": { name: "البرازيل", currency: "BRL", lang: "Português" },
-    "CA": { name: "كندا", currency: "CAD", lang: "English/Français" },
-    "MX": { name: "المكسيك", currency: "MXN", lang: "Español" },
-    "AU": { name: "أستراليا", currency: "AUD", lang: "English" },
-    "SG": { name: "سنغافورة", currency: "SGD", lang: "English/中文" },
-    "KR": { name: "كوريا الجنوبية", currency: "KRW", lang: "한국어" },
-    "RU": { name: "روسيا", currency: "RUB", lang: "Русский" },
+    "US": { name: "USA", currency: "USD", lang: "English" },
   };
 
-  // ملاحظة: يعتمد هذا على رأس 'x-vercel-ip-country' التي توفره Vercel.
-  // في بيئات الاستضافة الأخرى (مثل AWS, DigitalOcean)، قد تحتاج إلى استخدام مكتبة GeoIP
-  // مثل 'geoip-lite' لتحديد الموقع بناءً على IP.
-  return localeMap[countryCode] || localeMap["US"];
+  return localeMap[countryCode] || localeMap["EG"];
 }
 
 // ============================================================
 // POST Handler - المحرك الرئيسي للتحليل
 // ============================================================
-/**
- * يتعامل مع طلبات POST لتحليل الصور وإجراء جرد احترافي للعناصر.
- * @param request - كائن NextRequest الذي يحتوي على الصورة المراد تحليلها.
- * @returns استجابة JSON تحتوي على نتائج الجرد أو رسالة خطأ.
- */
 export async function POST(request: NextRequest) {
   try {
+    // أ. استخلاص السياق والتحقق من المفاتيح
     const ctx = getGlobalContext(request);
     
     if (!process.env.GEMINI_API_KEY) {
-      console.error("CRITICAL: GEMINI_API_KEY is missing. Check environment variables.");
       return NextResponse.json({ 
         success: false, 
-        error: "خطأ حرج: مفتاح API غير موجود. يرجى التحقق من متغيرات البيئة." 
+        error: "CRITICAL: API Key is missing. Check environment variables." 
       }, { status: 500 });
     }
 
@@ -71,161 +42,135 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "لم يتم استلام صورة للجرد" }, { status: 400 });
     }
 
-    let mimeType = "image/jpeg";
-    const base64Parts = image.split(",");
-    const base64Data = base64Parts.length > 1 ? base64Parts[1] : image;
-    if (base64Parts.length > 1 && base64Parts[0].startsWith("data:")) {
-      mimeType = base64Parts[0].substring(5, base64Parts[0].indexOf(";"));
-    }
-
-    if (!base64Data) {
-      return NextResponse.json({ success: false, error: "صيغة الصورة غير صالحة أو فارغة" }, { status: 400 });
-    }
-
-    // التحقق من حجم الصورة لمنع هجمات DoS
-    const imageBuffer = Buffer.from(base64Data, 'base64');
-    if (imageBuffer.length > MAX_IMAGE_SIZE_BYTES) {
-      return NextResponse.json({ success: false, error: `حجم الصورة يتجاوز الحد الأقصى المسموح به (${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)}MB).` }, { status: 413 });
-    }
-
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: {
+    // ب. تهيئة الموديل بأعلى معايير الدقة (Strict Mode)
+    // نستخدم Gemini 1.5 Flash للسرعة الفائقة في معالجة الصور المتعددة العناصر
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash", 
+      generationConfig: { 
         responseMimeType: "application/json",
-        temperature: 0.1,
-        topP: 0.95,
-      },
+        temperature: 0.1, // لضمان نتائج واقعية تماماً وتجنب التخيل
+        topP: 0.95
+      }
     });
 
-    // إصلاح Master Prompt مع الحفاظ على النص الكامل (بدون تغيير حرف واحد)
-    const masterPrompt = `
-  You are the "Universal Advanced Visual Inventory Engine".
-  
-  Your primary task is to analyze the provided image and perform a precise, professional inventory of any stock, commercial, or operational items visible, regardless of the sector or activity type.
-  
-  [Comprehensive Inventory Scope - Any Potential Stock]:
-  You are not limited to a specific sector but handle any environment containing inventory, including:
-  
-  1. Retail and Stores:
-     - Food items, consumer goods, canned products, beverages
-     - Prices, barcodes, expiry dates, promotions
-  
-  2. Tools and Equipment:
-     - Electric and hand tools (Drills, Grinders, Saws)
-     - Industrial equipment, spare parts, measuring devices
-     - Power estimation (W, V, HP) if available
-  
-  3. Furniture and Decor:
-     - Chairs, tables, cabinets, interior decor
-     - Material, color, style, and condition identification
-  
-  4. Logistics and Supply Chains:
-     - Boxes, containers, pallets
-     - Shipping numbers, tracking codes, labels
-  
-  5. Medicine, Pharmacy, and Laboratories:
-     - Medicines, packaging, medical equipment
-     - Expiry dates, concentration, medical barcodes
-  
-  6. Clothing and Fashion:
-     - Clothes, shoes, bags
-     - Sizes, brands, materials, colors
-  
-  7. Electronics:
-     - Phones, devices, screens, electronic boards
-     - Model, serial number, specifications
-  
-  8. Any other unclassified inventory:
-     - Any item suitable for sale, storage, or inventory should be considered an "Inventory Item"
-  
-  [Strict Instructions]:
-  1. Language: Use ${ctx.lang} for all textual output in the JSON values.
-  2. Currency: Use ${ctx.currency} only when a price estimate is available.
-  3. **Comprehensive and Accurate Analysis:** Analyze every part of the image with extreme precision, focusing on detecting all visible items, even small or background ones.
-  4. **Do not assume unseen or unconfirmed information.** If the image quality is low or an item is unclear, set \`confidence\` to \`low\` and add a note in \`warnings\`.
-  5. High accuracy in distinguishing similar items.
-  6. Extract each item independently, even if duplicated.
-  7. **Do not add any items not actually present in the image (Zero Hallucination).** This is critically important.
-  8. **Handle low-quality images with extreme caution.** Try to extract what can be clearly extracted, and set \`confidence\` to \`low\` for questionable items. Do not invent details.
-  
-  [Required Analytical Intelligence]:
-  - Accurately distinguish similar products (e.g., types of chargers or tools).
-  - Identify brands if visible (Bosch, Makita, Samsung, Apple...).
-  - Read small texts (labels, barcodes, serial numbers) with high accuracy.
-  - Understand product condition (new / used / stock / on display for sale).
-  - **Estimate approximate dimensions or size of items if possible, indicating that the estimate is approximate.**
-  
-  [Output System - JSON Only]:
-  {
-    "business_type": "Auto-detected business category or General_Inventory",
-    "analysis_quality": "excellent | good | fair | poor", // Reflects analysis quality based on image clarity
-    "detected_items_count": 0,
-    "products": [
-      {
-        "product_name": "اسم دقيق ومحترف للمنتج",
-        "brand": "العلامة التجارية إن وجدت أو null",
-        "category": "التصنيف الدقيق",
-        "unit_price": "رقم فقط أو null إذا غير متاح",
-        "quantity": "عدد القطع الظاهرة",
-        "barcode_serial": "barcode / serial / model number أو null", // Barcode, serial, and model number combined
-        "confidence": "high | medium | low",
-        "notes": "تفاصيل تقنية مثل المقاس، القوة، الحالة، اللون، الإصدار، أو أي معلومات إضافية مستخلصة."
-      }
-    ],
-    "warnings": [
-      "أي مشاكل في وضوح الصورة أو احتمالات خطأ في التعرف بسبب جودة الصورة المنخفضة أو التعتيم."
-    ],
-    "suggestions": [
-      "اقتراحات لتحسين الجرد المستقبلي، مثل: 'يرجى توفير صور ذات إضاءة أفضل للحصول على نتائج أدق.'"
-    ]
-  };
-  [Golden Rules]:
-  - Do not output anything outside of JSON.
-  - Do not add textual explanations outside of JSON.
-  - Do not hallucinate non-existent products.
-  - Each item must be independent and actually inventory-able.
-  - **If the image is empty or contains no clear inventory items, return an empty JSON with 'analysis_quality': 'poor' and appropriate 'warnings'.**
-  - **Ensure all values in the JSON are consistent with their type (e.g., 'unit_price' must be a number or null).**
-`;
+    const base64Data = image.split(",")[1] || image;
 
-    // تنفيذ الاستدعاء مع معالجة الأخطاء لضمان استقرار النظام (Security Best Practices)
+    // ج. البرومبت العبقري المطور (The Master Intelligence Prompt)
+    const masterPrompt = `
+    أنت "محرك الجرد البصري العالمي المتقدم" (Universal Inventory Intelligence Engine).
+    
+    مهمتك الأساسية هي تحليل الصورة المرفقة وإجراء جرد احترافي دقيق لأي عناصر مخزنية أو تجارية أو تشغيلية تظهر فيها، بغض النظر عن القطاع أو نوع النشاط.
+    
+    [النطاق الشامل للجرد - أي مخزون محتمل]:
+    أنت لا تقتصر على قطاع محدد، بل تتعامل مع أي بيئة تحتوي على مخزون، بما في ذلك:
+    
+    1. التجزئة والمتاجر:
+       - مواد غذائية، سلع استهلاكية، منتجات معلبة، مشروبات
+       - أسعار، باركود، تواريخ صلاحية، عروض
+    
+    2. الأدوات والمعدات:
+       - أدوات كهربائية ويدوية (Drills, Grinders, Saws)
+       - معدات صناعية، قطع غيار، أجهزة قياس
+       - تقدير القدرة (W, V, HP) إن وجدت
+    
+    3. الأثاث والديكور:
+       - كراسي، طاولات، خزائن، ديكور داخلي
+       - تحديد الخامة، اللون، الطراز، والحالة
+    
+    4. اللوجستيات وسلاسل الإمداد:
+       - صناديق، حاويات، منصات (Pallets)
+       - أرقام شحن، رموز تتبع، Labels
+    
+    5. الطب والصيدلة والمختبرات:
+       - أدوية، عبوات، معدات طبية
+       - تواريخ انتهاء، تركيز، باركود طبي
+    
+    6. الملابس والأزياء:
+       - ملابس، أحذية، حقائب
+       - مقاسات، ماركات، خامات، ألوان
+    
+    7. الإلكترونيات:
+       - هواتف، أجهزة، شاشات، لوحات إلكترونية
+       - موديل، سيريال نمبر، مواصفات
+    
+    8. أي مخزون آخر غير مصنف:
+       - أي عنصر قابل للبيع أو التخزين أو الجرد يجب اعتباره "Inventory Item"
+    
+    [التعليمات الصارمة]:
+    1. اللغة: استخدم ${ctx.lang}
+    2. العملة: استخدم ${ctx.currency} فقط عند وجود تقدير سعر
+    3. لا تفترض معلومات غير مرئية إلا مع وضع confidence منخفض
+    4. دقة عالية في التمييز بين العناصر المتشابهة
+    5. استخراج كل عنصر بشكل مستقل حتى لو كان مكرر
+    
+    [الذكاء التحليلي المطلوب]:
+    - تمييز المنتجات المتشابهة بدقة (مثلاً أنواع الشواحن أو الأدوات)
+    - التعرف على العلامات التجارية إن ظهرت (Bosch, Makita, Samsung, Apple...)
+    - قراءة النصوص الصغيرة (labels, barcodes, serial numbers)
+    - فهم حالة المنتج (جديد / مستخدم / مخزون / معروض للبيع)
+    
+    [نظام الإخراج - JSON فقط]:
+    {
+      "business_type": "Auto-detected business category or General_Inventory",
+      "analysis_quality": "excellent | good | partial",
+      "detected_items_count": 0,
+      "products": [
+        {
+          "product_name": "اسم دقيق ومحترف للمنتج",
+          "brand": "العلامة التجارية إن وجدت",
+          "category": "التصنيف الدقيق",
+          "unit_price": "رقم فقط أو null إذا غير متاح",
+          "quantity": "عدد القطع الظاهرة",
+          "barcode": "barcode / serial / null",
+          "confidence": "high | medium | low",
+          "notes": "تفاصيل تقنية مثل المقاس، القوة، الحالة، اللون، الإصدار"
+        }
+      ],
+      "warnings": [
+        "أي مشاكل في وضوح الصورة أو احتمالات خطأ في التعرف"
+      ]
+    };
+    [قواعد ذهبية]:
+    - لا تخرج عن JSON نهائياً
+    - لا تضف شرح نصي خارج JSON
+    - لا تتخيل منتجات غير موجودة
+    - كل عنصر يجب أن يكون مستقل وقابل للجرد الفعلي
+  }`; 
+
+
+    // د. تنفيذ المعالجة البصرية
     const result = await model.generateContent([
       masterPrompt,
       {
         inlineData: {
           data: base64Data,
-          mimeType: mimeType,
+          mimeType: "image/jpeg",
         },
       },
     ]);
 
     const responseText = result.response.text();
     
+    // هـ. التحقق من صحة الـ JSON المستلم قبل إرساله
     try {
-      const parsedData: InventoryAnalysisResult = JSON.parse(responseText);
+      const parsedData = JSON.parse(responseText);
       
-      if (!parsedData.products || !Array.isArray(parsedData.products)) {
-        console.warn("AI response did not contain a valid 'products' array.", responseText);
-        throw new Error("Invalid AI response structure.");
-      }
-
       return NextResponse.json({
         success: true,
         ...parsedData,
         detected_location: ctx.name,
         timestamp: new Date().toISOString()
       });
-    } catch (parseError: any) {
-      console.error("AI Parsing Error: Invalid JSON or structure.", parseError.message, "Raw AI Response:", responseText);
+    } catch (parseError) {
+      console.error("AI Parsing Error:", responseText);
       return NextResponse.json({ 
         success: false, 
-        error: "فشل المحرك في صياغة البيانات بشكل سليم أو هيكل الاستجابة غير صالح.",
-        detail: parseError.message
+        error: "فشل المحرك في صياغة البيانات بشكل سليم" 
       }, { status: 500 });
     }
 
   } catch (error: any) {
-    console.error("Global Master API Error:", error.message, error.stack);
+    console.error("Global Master API Error:", error);
     return NextResponse.json({ 
       success: false, 
       error: "حدث خطأ غير متوقع في محرك الجرد",
@@ -236,15 +181,12 @@ export async function POST(request: NextRequest) {
 
 /**
  * Health Check & Model Versioning
- * يوفر معلومات حول حالة API ونوعه وإصداره والصناعات المدعومة.
- * @returns استجابة JSON تحتوي على معلومات الحالة.
  */
 export async function GET() {
-  return NextResponse.json({
-    status: "online",
+  return NextResponse.json({ 
+    status: "online", 
     engine: "Universal Inventory Intelligence",
-    version: "2026.4.30-global-professional-enhanced-v5",
-    supported_industries: ["Pharmacy", "Hardware", "Logistics", "Retail", "Furniture", "Electronics", "Apparel", "General Inventory"],
-    description: "Advanced AI-powered visual inventory system for highly accurate and non-hallucinatory analysis of diverse inventory items, including low-quality images, with global language and currency support and enhanced granular detection."
+    version: "2026.4.30",
+    supported_industries: ["Pharmacy", "Hardware", "Logistics", "Retail", "Furniture"]
   });
 }
