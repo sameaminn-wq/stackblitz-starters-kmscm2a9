@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// 1. إعداد محرك الذكاء الاصطناعي (تأكد من وجود المفتاح في .env.local)
+// 1. إعداد محرك الذكاء الاصطناعي
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 // ============================================================
-// Types & Interfaces (متوافقة تماماً مع الـ Frontend الخاص بك)
+// Types & Interfaces
 // ============================================================
 type Confidence = "high" | "medium" | "low";
 type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
@@ -31,11 +31,10 @@ interface AnalysisResult {
 }
 
 // ============================================================
-// Logic: اكتشاف الدولة والعملة واللغة
+// Logic: تحويل كود الدولة إلى سياق (Currency/Lang)
 // ============================================================
-function getUserContext(request: NextRequest) {
-  // اكتشاف الدولة من الـ Headers (Vercel/Cloudflare) أو افتراضي "EG"
-  const countryCode = request.headers.get("x-vercel-ip-country") || "EG";
+function getContextByCountryCode(code: string | null) {
+  const country = code || "EG";
 
   const localeMap: Record<string, { name: string; currency: string; lang: string }> = {
     "SA": { name: "المملكة العربية السعودية", currency: "ريال سعودي", lang: "العربية (السعودية)" },
@@ -48,7 +47,7 @@ function getUserContext(request: NextRequest) {
     "US": { name: "الولايات المتحدة", currency: "USD", lang: "English" },
   };
 
-  return localeMap[countryCode] || localeMap["EG"];
+  return localeMap[country] || localeMap["EG"];
 }
 
 // ============================================================
@@ -61,28 +60,28 @@ async function analyzeWithGemini(imageBase64: string, context: any): Promise<Par
     model: "gemini-1.5-flash",
     generationConfig: { 
       responseMimeType: "application/json",
-      temperature: 0.1 // دقة أعلى وتقليل الهلوسة
+      temperature: 0.1 
     }
   });
 
   const prompt = `
     أنت مستشار جرد محترف تعمل في ${context.name}. 
     حلل صورة الرفوف واستخرج المنتجات باللغة: ${context.lang}.
-    يجب أن تكون الأسعار متوافقة مع العملة: ${context.currency}.
+    يجب أن تكون الأسعار متوافقة مع العملة المحلية: ${context.currency}.
     
-    المطلوب رد JSON يحتوي مصفوفة "products" كالتالي:
-    - product_name: اسم المنتج (عربي دقيق).
+    المطلوب رد JSON حصري يحتوي مصفوفة "products" كالتالي:
+    - product_name: اسم المنتج بالعربية.
     - brand: العلامة التجارية.
     - category: التصنيف.
     - unit_price: السعر الرقمي فقط كـ string.
-    - quantity: الكمية (رقم).
-    - barcode: الباركود (إن وجد).
+    - quantity: الكمية المكتشفة (رقم).
+    - barcode: الباركود إن وجد.
     - confidence: (high/medium/low).
-    - notes: ملاحظات حول حالة المنتج أو وضوح السعر.
+    - notes: ملاحظات حول المنتج.
 
-    أضف أيضاً:
+    أضف أيضاً للرد:
     - analysis_quality: (excellent/good/partial).
-    - warnings: قائمة بأي مشاكل في الصورة (إضاءة ضعيفة، منتجات متداخلة).
+    - warnings: أي مشاكل في وضوح الصورة.
   `;
 
   try {
@@ -92,9 +91,9 @@ async function analyzeWithGemini(imageBase64: string, context: any): Promise<Par
     ]);
 
     return JSON.parse(result.response.text());
-  } catch (error) {
-    console.error("Gemini Execution Error:", error);
-    throw new Error("فشل الذكاء الاصطناعي في معالجة الصورة.");
+  } catch (error: any) {
+    console.error("Gemini Error:", error);
+    throw new Error(error.message || "فشل تحليل الصورة عبر AI");
   }
 }
 
@@ -103,21 +102,27 @@ async function analyzeWithGemini(imageBase64: string, context: any): Promise<Par
 // ============================================================
 export async function POST(request: NextRequest) {
   try {
+    // استخراج الهيدر فوراً لتجنب مشاكل الـ AsyncStorage في Next.js
+    const countryCode = request.headers.get("x-vercel-ip-country");
+    
     const body = await request.json();
     const { image } = body;
 
-    // 1. Validations
-    if (!image || !image.startsWith("data:image/")) {
-      return NextResponse.json({ success: false, error: "يجب تقديم صورة صالحة بتنسيق Base64" }, { status: 400 });
+    // التأكد من وجود مفتاح API
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ success: false, error: "API Key is missing in environment" }, { status: 500 });
     }
 
-    // 2. Get User Context (Country/Currency)
-    const userContext = getUserContext(request);
+    if (!image || !image.startsWith("data:image/")) {
+      return NextResponse.json({ success: false, error: "صورة غير صالحة" }, { status: 400 });
+    }
 
-    // 3. Perform AI Analysis
+    // بناء السياق الجغرافي
+    const userContext = getContextByCountryCode(countryCode);
+
+    // التحليل
     const aiResponse = await analyzeWithGemini(image, userContext);
 
-    // 4. Return Structured Response
     return NextResponse.json({
       success: true,
       products: aiResponse.products || [],
@@ -131,13 +136,12 @@ export async function POST(request: NextRequest) {
     console.error("Final API Error:", error);
     return NextResponse.json({ 
       success: false, 
-      error: "حدث خطأ غير متوقع",
+      error: "حدث خطأ في السيرفر",
       detail: error.message 
     }, { status: 500 });
   }
 }
 
-// Health Check
 export async function GET() {
   return NextResponse.json({ status: "active", engine: "Gemini-1.5-Flash" });
 }
