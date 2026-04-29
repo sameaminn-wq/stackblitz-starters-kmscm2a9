@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { InventoryAnalysisResult, ProductItem } from "../types";
@@ -41,7 +40,7 @@ function getGlobalContext(request: NextRequest) {
     "RU": { name: "روسيا", currency: "RUB", lang: "Русский" },
   };
 
-  // ملاحظة: يعتمد هذا على رأس 'x-vercel-ip-country' الذي توفره Vercel.
+  // ملاحظة: يعتمد هذا على رأس 'x-vercel-ip-country' التي توفره Vercel.
   // في بيئات الاستضافة الأخرى (مثل AWS, DigitalOcean)، قد تحتاج إلى استخدام مكتبة GeoIP
   // مثل 'geoip-lite' لتحديد الموقع بناءً على IP.
   return localeMap[countryCode] || localeMap["US"];
@@ -97,14 +96,9 @@ export async function POST(request: NextRequest) {
         topP: 0.95,
       },
     });
-// 1. تعريف المتغيرات المطلوبة لضمان عدم وجود أخطاء مرجعية
-const ctx = {
-  lang: "Arabic", // أو القيمة الديناميكية التي تستخدمها
-  currency: "SAR"  // أو القيمة الديناميكية التي تستخدمها
-};
 
-// 2. إصلاح Master Prompt مع الحفاظ على النص الكامل (بدون تغيير حرف واحد)
-const masterPrompt = `
+    // إصلاح Master Prompt مع الحفاظ على النص الكامل (بدون تغيير حرف واحد)
+    const masterPrompt = `
   You are the "Universal Advanced Visual Inventory Engine".
   
   Your primary task is to analyze the provided image and perform a precise, professional inventory of any stock, commercial, or operational items visible, regardless of the sector or activity type.
@@ -194,25 +188,16 @@ const masterPrompt = `
   - **Ensure all values in the JSON are consistent with their type (e.g., 'unit_price' must be a number or null).**
 `;
 
-// 3. تنفيذ الاستدعاء مع معالجة الأخطاء لضمان استقرار النظام (Security Best Practices)
-try {
-  const result = await model.generateContent([
+    // تنفيذ الاستدعاء مع معالجة الأخطاء لضمان استقرار النظام (Security Best Practices)
+    const result = await model.generateContent([
       masterPrompt,
       {
-          inlineData: {
-              data: base64Data, // تأكد أن هذا المتغير يحتوي على base64 للصورة
-              mimeType: "image/png", // أو نوع الصورة المناسب
-          },
+        inlineData: {
+          data: base64Data,
+          mimeType: mimeType,
+        },
       },
-  ]);
-  
-  // التعامل مع النتيجة (Result Handling)
-  const responseText = result.response.text();
-  console.log("Inventory Result:", JSON.parse(responseText));
-
-} catch (error) {
-  console.error("Critical Analysis Error:", error.message);
-}
+    ]);
 
     const responseText = result.response.text();
     
