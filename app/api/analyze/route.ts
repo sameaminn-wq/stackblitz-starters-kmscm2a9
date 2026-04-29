@@ -1,106 +1,89 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// 1. إعداد محرك الذكاء الاصطناعي العالمي (Enterprise Configuration)
+// 1. إعداد محرك الذكاء الاصطناعي
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-/**
- * نظام استخبارات الموقع - يحدد السياق الجغرافي والمالي واللغوي تلقائياً
- */
-function getGlobalContext(request: NextRequest) {
-  const countryCode = request.headers.get("x-vercel-ip-country") || "EG";
-  
+// ============================================================
+// Logic: تحويل كود الدولة إلى سياق (Currency/Lang)
+// ============================================================
+function getContextByCountryCode(code: string | null) {
+  const country = code || "EG";
+
   const localeMap: Record<string, { name: string; currency: string; lang: string }> = {
-    "SA": { name: "المملكة العربية السعودية", currency: "SAR", lang: "العربية" },
-    "EG": { name: "مصر", currency: "EGP", lang: "العربية" },
-    "AE": { name: "الإمارات", currency: "AED", lang: "العربية/English" },
-    "KW": { name: "الكويت", currency: "KWD", lang: "العربية" },
-    "QA": { name: "قطر", currency: "QAR", lang: "العربية" },
-    "US": { name: "USA", currency: "USD", lang: "English" },
+    "SA": { name: "المملكة العربية السعودية", currency: "ريال سعودي", lang: "العربية (السعودية)" },
+    "EG": { name: "مصر", currency: "جنيه مصري", lang: "العربية (المصرية)" },
+    "AE": { name: "الإمارات العربية المتحدة", currency: "درهم إماراتي", lang: "العربية (الإماراتية)" },
+    "KW": { name: "الكويت", currency: "دينار كويتي", lang: "العربية (الكويتية)" },
+    "QA": { name: "قطر", currency: "ريال قطري", lang: "العربية" },
+    "JO": { name: "الأردن", currency: "دينار أردني", lang: "العربية" },
+    "MA": { name: "المغرب", currency: "درهم مغربي", lang: "العربية (المغربية)" },
+    "US": { name: "الولايات المتحدة", currency: "USD", lang: "English" },
   };
 
-  return localeMap[countryCode] || localeMap["EG"];
+  return localeMap[country] || localeMap["EG"];
 }
 
 // ============================================================
-// POST Handler - المحرك الرئيسي للتحليل
+// Route Handler: POST
 // ============================================================
 export async function POST(request: NextRequest) {
   try {
-    // أ. استخلاص السياق والتحقق من المفاتيح
-    const ctx = getGlobalContext(request);
-    
+    // أ. استخراج البيانات الأساسية فوراً
+    const countryCode = request.headers.get("x-vercel-ip-country");
+    const userContext = getContextByCountryCode(countryCode);
+
+    // ب. التأكد من وجود مفتاح API
     if (!process.env.GEMINI_API_KEY) {
+      console.error("CRITICAL: GEMINI_API_KEY is missing!");
       return NextResponse.json({ 
         success: false, 
-        error: "CRITICAL: API Key is missing. Check environment variables." 
+        error: "فشل في العثور على مفتاح API. تأكد من إعداد الملف .env.local" 
       }, { status: 500 });
     }
 
-    const { image } = await request.json();
-    if (!image) {
-      return NextResponse.json({ success: false, error: "لم يتم استلام صورة للجرد" }, { status: 400 });
+    // ج. قراءة الصورة من الطلب
+    const body = await request.json();
+    const { image } = body;
+
+    if (!image || !image.startsWith("data:image/")) {
+      return NextResponse.json({ success: false, error: "لم يتم استلام صورة صالحة" }, { status: 400 });
     }
 
-    // ب. تهيئة الموديل بأعلى معايير الدقة (Strict Mode)
-    // نستخدم Gemini 1.5 Flash للسرعة الفائقة في معالجة الصور المتعددة العناصر
+    // د. إعداد Gemini
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash", 
+      model: "gemini-2.5-flash",
       generationConfig: { 
         responseMimeType: "application/json",
-        temperature: 0.1, // لضمان نتائج واقعية تماماً وتجنب التخيل
-        topP: 0.95
+        temperature: 0.1 
       }
     });
 
     const base64Data = image.split(",")[1] || image;
 
-    // ج. البرومبت العبقري المطور (The Master Intelligence Prompt)
-    const masterPrompt = `
-أنت "محرك الجرد البصري العالمي المتقدم" (Universal Inventory Intelligence Engine).
+    const prompt = `
+      أنت مستشار جرد محترف في ${userContext.name}. 
+      حلل الصورة واستخرج المنتجات باللغة: ${userContext.lang}.
+      الأسعار يجب أن تكون بالعملة: ${userContext.currency}.
+      
+      يجب أن يكون الرد JSON حصري يحتوي مصفوفة "products" تشمل:
+      - product_name (اسم المنتج بالعربية)
+      - brand (الماركة)
+      - category (التصنيف)
+      - unit_price (السعر كـ string بدون عملة)
+      - quantity (رقم)
+      - barcode (إن وجد)
+      - confidence (high/medium/low)
+      - notes (ملاحظات الجرد)
 
-مهمتك الأساسية هي تحليل الصورة المرفقة وإجراء جرد احترافي دقيق لأي عناصر مخزنية أو تجارية تظهر فيها، بغض النظر عن القطاع.
+      أضف أيضاً للرد الرئيسي:
+      - analysis_quality (excellent/good/partial)
+      - warnings (قائمة بأي مشاكل في الصورة)
+    `;
 
-[النطاق الشامل للجرد]:
-1. التجزئة والمتاجر: (مواد غذائية، سلع، أسعار، باركود، تواريخ صلاحية).
-2. الأدوات والمعدات: (أدوات كهربائية ويدوية مثل Bosch, Makita، تحديد القدرة W, V).
-3. الأثاث والديكور: (كراسي، كنب، طاولات، تحديد الخامة واللون والطراز).
-4. اللوجستيات والموانئ: (صناديق، حاويات، منصات Pallets، رموز تتبع).
-5. الطب والصيدلة: (أدوية، معدات طبية، باركود طبي، تركيز).
-6. الملابس والأزياء: (مقاسات، ماركات، خامات، ألوان).
-7. الإلكترونيات: (هواتف، شاشات، سيريال نمبر، موديل).
-
-[التعليمات الصارمة]:
-1. اللغة: استخدم ${ctx.lang}.
-2. العملة: استخدم ${ctx.currency} عند وجود تقدير سعر.
-3. استخراج كل عنصر بشكل مستقل بدقة متناهية.
-4. فهم حالة المنتج (جديد / مستخدم / مخزون).
-
-[نظام الإخراج - JSON فقط]:
-يجب أن يكون الرد JSON كائن يحتوي على:
-{
-  "business_type": "Auto-detected category",
-  "analysis_quality": "excellent | good | partial",
-  "detected_items_count": number,
-  "products": [
-    {
-      "product_name": "...",
-      "brand": "...",
-      "category": "...",
-      "unit_price": "number_only_as_string",
-      "quantity": number,
-      "barcode": "...",
-      "confidence": "high | medium | low",
-      "notes": "تفاصيل تقنية: مقاس، قوة، حالة، لون"
-    }
-  ],
-  "warnings": []
-}
-`;
-
-    // د. تنفيذ المعالجة البصرية
+    // هـ. تنفيذ التحليل
     const result = await model.generateContent([
-      masterPrompt,
+      prompt,
       {
         inlineData: {
           data: base64Data,
@@ -111,42 +94,41 @@ export async function POST(request: NextRequest) {
 
     const responseText = result.response.text();
     
-    // هـ. التحقق من صحة الـ JSON المستلم قبل إرساله
+    // و. معالجة الرد والتأكد من صحته
     try {
-      const parsedData = JSON.parse(responseText);
+      const aiData = JSON.parse(responseText);
       
       return NextResponse.json({
         success: true,
-        ...parsedData,
-        detected_location: ctx.name,
-        timestamp: new Date().toISOString()
+        products: aiData.products || [],
+        total_products_detected: (aiData.products || []).length,
+        analysis_quality: aiData.analysis_quality || "good",
+        warnings: aiData.warnings || [],
+        detected_location: userContext.name
       });
     } catch (parseError) {
-      console.error("AI Parsing Error:", responseText);
+      console.error("AI Response Parsing Failed:", responseText);
       return NextResponse.json({ 
         success: false, 
-        error: "فشل المحرك في صياغة البيانات بشكل سليم" 
+        error: "فشل الذكاء الاصطناعي في صياغة البيانات بشكل صحيح" 
       }, { status: 500 });
     }
 
   } catch (error: any) {
-    console.error("Global Master API Error:", error);
+    console.error("Final API Error:", error);
     return NextResponse.json({ 
       success: false, 
-      error: "حدث خطأ غير متوقع في محرك الجرد",
+      error: "حدث خطأ غير متوقع في السيرفر",
       detail: error.message 
     }, { status: 500 });
   }
 }
 
-/**
- * Health Check & Model Versioning
- */
+// GET للتحقق من أن الـ Endpoint يعمل
 export async function GET() {
   return NextResponse.json({ 
-    status: "online", 
-    engine: "Universal Inventory Intelligence",
-    version: "2026.4.30",
-    supported_industries: ["Pharmacy", "Hardware", "Logistics", "Retail", "Furniture"]
+    status: "active", 
+    engine: "Gemini-1.5-Flash",
+    config: "JSON_STRICT_MODE"
   });
 }
