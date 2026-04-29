@@ -9,7 +9,7 @@ import { InventoryAnalysisResult, ProductItem, Confidence } from "../../types";
 // ============================================================
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const MODEL_NAME = "gemini-2-flash"; // تحديث لاسم النموذج المستقر حالياً
+const MODEL_NAME = "gemini-2.5-flash"; // تحديث لاسم النموذج المستقر حالياً
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
 const MAX_REQUEST_SIZE_BYTES = 10 * 1024 * 1024;
