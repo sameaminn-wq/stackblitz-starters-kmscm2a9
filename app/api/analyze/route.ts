@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
     // ب. تهيئة الموديل بأعلى معايير الدقة (Strict Mode)
     // نستخدم Gemini 1.5 Flash للسرعة الفائقة في معالجة الصور المتعددة العناصر
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash", 
+      model: "gemini-2.5-flash", 
       generationConfig: { 
         responseMimeType: "application/json",
         temperature: 0.1, // لضمان نتائج واقعية تماماً وتجنب التخيل
