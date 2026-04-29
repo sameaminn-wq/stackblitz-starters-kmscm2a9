@@ -1,6 +1,6 @@
-"use client"; // تأكد من وجود هذا السطر في أول الملف تماماً
+"use client";
 
-import { useState, useEffect } from "react"; // أضف useEffect هنا
+import { useState, useEffect, useRef, useCallback } from "react";
 // تأكد أيضاً من استيراد useEffect إذا كنت تستخدم isMounted
 
 // ============================================================
