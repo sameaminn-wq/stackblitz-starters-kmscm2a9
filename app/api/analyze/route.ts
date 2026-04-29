@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Types (مطابقة للـ client)
+/* =========================================================
+   Gemini Config
+========================================================= */
+const apiKey = process.env.GEMINI_API_KEY;
+
+if (!apiKey) {
+  throw new Error("Missing GEMINI_API_KEY");
+}
+
+const genAI = new GoogleGenerativeAI(apiKey);
+
+/* =========================================================
+   Types
+========================================================= */
 type Confidence = "high" | "medium" | "low";
 type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
 
@@ -9,7 +23,7 @@ interface ProductItem {
   brand: string;
   category: string;
   unit_price: string;
-  quantity: number | string;
+  quantity: number;
   barcode: string;
   confidence: Confidence;
   notes: string;
@@ -17,138 +31,209 @@ interface ProductItem {
 
 interface AnalysisResult {
   success: boolean;
+  country: string;
+  currency: string;
+  language: string;
   products: ProductItem[];
   total_products_detected: number;
   analysis_quality: AnalysisQuality;
   warnings: string[];
 }
 
-// Mock AI Analysis - استبدل هذا بـ DeepSeek API أو أي خدمة أخرى
-async function analyzeImageWithAI(imageBase64: string): Promise<AnalysisResult> {
-  // ============================================================
-  // ⚠️ هنا تضع منطق التحليل الحقيقي باستخدام DeepSeek/OpenAI
-  // ============================================================
-  
-  // مثال: استخدام DeepSeek API
-  // const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
-  //   method: "POST",
-  //   headers: {
-  //     "Content-Type": "application/json",
-  //     "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
-  //   },
-  //   body: JSON.stringify({
-  //     model: "deepseek-chat",
-  //     messages: [{
-  //       role: "user",
-  //       content: `Analyze this inventory image and return JSON with products. Format: ${JSON.stringify(analysisResultSchema)}`
-  //     }],
-  //     image: imageBase64
-  //   })
-  // });
-  
-  // ============================================================
-  // Demo: بيانات وهمية للاختبار
-  // ============================================================
-  await new Promise(resolve => setTimeout(resolve, 1500)); // محاكاة التأخير
-  
-  const mockProducts: ProductItem[] = [
-    {
-      product_name: "حليب طازج",
-      brand: "دانون",
-      category: "ألبان",
-      unit_price: "25.50",
-      quantity: "12",
-      barcode: "6281000000001",
-      confidence: "high",
-      notes: "منتهي الصلاحية خلال 5 أيام"
-    },
-    {
-      product_name: "زبادي بالفراولة",
-      brand: "مزارع",
-      category: "ألبان",
-      unit_price: "8.00",
-      quantity: "24",
-      barcode: "6281000000002",
-      confidence: "high",
-      notes: ""
-    },
-    {
-      product_name: "عصير برتقال",
-      brand: "تاكو",
-      category: "مشروبات",
-      unit_price: "15.00",
-      quantity: "18",
-      barcode: "6281000000003",
-      confidence: "medium",
-      notes: "السعر قد يكون تقريبياً"
-    },
-    {
-      product_name: "خبز أبيض",
-      brand: "الأهرام",
-      category: "مخابز",
-      unit_price: "5.50",
-      quantity: "8",
-      barcode: "",
-      confidence: "low",
-      notes: "لم يتم اكتشاف باركود"
+/* =========================================================
+   Country Detection
+========================================================= */
+function detectCountry(req: NextRequest) {
+  const country =
+    req.headers.get("x-vercel-ip-country") ||
+    req.headers.get("cf-ipcountry") ||
+    req.geo?.country ||
+    "EG";
+
+  return country.toUpperCase();
+}
+
+function getCountrySettings(code: string) {
+  const countries: Record<
+    string,
+    { country: string; currency: string; language: string }
+  > = {
+    EG: { country: "Egypt", currency: "EGP", language: "Arabic" },
+    SA: { country: "Saudi Arabia", currency: "SAR", language: "Arabic" },
+    AE: { country: "UAE", currency: "AED", language: "Arabic" },
+    KW: { country: "Kuwait", currency: "KWD", language: "Arabic" },
+    QA: { country: "Qatar", currency: "QAR", language: "Arabic" },
+    BH: { country: "Bahrain", currency: "BHD", language: "Arabic" },
+    OM: { country: "Oman", currency: "OMR", language: "Arabic" },
+    US: { country: "United States", currency: "USD", language: "English" },
+    GB: { country: "United Kingdom", currency: "GBP", language: "English" },
+    FR: { country: "France", currency: "EUR", language: "French" },
+    DE: { country: "Germany", currency: "EUR", language: "German" },
+  };
+
+  return (
+    countries[code] || {
+      country: "Egypt",
+      currency: "EGP",
+      language: "Arabic",
     }
-  ];
+  );
+}
+
+/* =========================================================
+   Helpers
+========================================================= */
+function json(data: unknown, status = 200) {
+  return NextResponse.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function getMime(base64: string) {
+  const match = base64.match(/^data:(image\/.*?);base64,/);
+  return match?.[1] || "image/jpeg";
+}
+
+function cleanBase64(base64: string) {
+  return base64.split(",")[1] || "";
+}
+
+/* =========================================================
+   Gemini Analyze
+========================================================= */
+async function analyzeImage(
+  image: string,
+  countryInfo: {
+    country: string;
+    currency: string;
+    language: string;
+  }
+): Promise<AnalysisResult> {
+  const mimeType = getMime(image);
+  const base64 = cleanBase64(image);
+
+  const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.2,
+    },
+  });
+
+  const prompt = `
+You are a professional inventory AI.
+
+User Country: ${countryInfo.country}
+Language: ${countryInfo.language}
+Currency: ${countryInfo.currency}
+
+Analyze shelf/store image and extract visible products only.
+
+Rules:
+- Use ${countryInfo.language} language in response.
+- Use ${countryInfo.currency} currency.
+- If price unclear leave empty.
+- Count repeated items.
+- No guessing.
+
+Return JSON only:
+
+{
+ "products":[
+   {
+    "product_name":"",
+    "brand":"",
+    "category":"",
+    "unit_price":"",
+    "quantity":0,
+    "barcode":"",
+    "confidence":"high",
+    "notes":""
+   }
+ ],
+ "analysis_quality":"excellent",
+ "warnings":[]
+}
+`;
+
+  const result = await model.generateContent([
+    prompt,
+    {
+      inlineData: {
+        data: base64,
+        mimeType,
+      },
+    },
+  ]);
+
+  const text = result.response.text();
+  const parsed = JSON.parse(text);
+
+  const products = Array.isArray(parsed.products)
+    ? parsed.products
+    : [];
 
   return {
     success: true,
-    products: mockProducts,
-    total_products_detected: mockProducts.length,
-    analysis_quality: "good",
-    warnings: [
-      "بعض الأسعار تقريبية - يرجى المراجعة",
-      "منتج واحد بدون باركود"
-    ]
+    country: countryInfo.country,
+    currency: countryInfo.currency,
+    language: countryInfo.language,
+    products,
+    total_products_detected: products.length,
+    analysis_quality: parsed.analysis_quality || "good",
+    warnings: parsed.warnings || [],
   };
 }
 
-export async function POST(request: NextRequest) {
+/* =========================================================
+   POST
+========================================================= */
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const { image } = body;
+    const body = await req.json();
+    const image = body?.image;
 
     if (!image) {
-      return NextResponse.json(
-        { success: false, error: "لم يتم تقديم صورة" },
-        { status: 400 }
+      return json(
+        { success: false, error: "No image uploaded" },
+        400
       );
     }
 
-    // التحقق من صحة الصورة (base64)
-    if (!image.startsWith("data:image/")) {
-      return NextResponse.json(
-        { success: false, error: "صيغة الصورة غير صحيحة" },
-        { status: 400 }
-      );
-    }
+    const countryCode = detectCountry(req);
+    const countryInfo = getCountrySettings(countryCode);
 
-    // تحليل الصورة
-    const result = await analyzeImageWithAI(image);
+    const result = await analyzeImage(image, countryInfo);
 
-    return NextResponse.json(result);
-
-  } catch (error) {
-    console.error("Analysis Error:", error);
-    return NextResponse.json(
-      { 
-        success: false, 
-        error: "حدث خطأ أثناء تحليل الصورة",
-        detail: error instanceof Error ? error.message : "خطأ غير معروف"
+    return json(result);
+  } catch (error: any) {
+    return json(
+      {
+        success: false,
+        error: "Image analysis failed",
+        detail: error.message,
       },
-      { status: 500 }
+      500
     );
   }
 }
 
-// GET method for health check
-export async function GET() {
-  return NextResponse.json({ 
-    status: "ok", 
+/* =========================================================
+   GET
+========================================================= */
+export async function GET(req: NextRequest) {
+  const code = detectCountry(req);
+  const country = getCountrySettings(code);
+
+  return json({
+    status: "ok",
+    service: "Global Smart Analyzer",
+    auto_detected_country: country.country,
+    currency: country.currency,
+    language: country.language,
     endpoint: "/api/analyze",
-    message: "AI Inventory Analysis API is running"
   });
 }
