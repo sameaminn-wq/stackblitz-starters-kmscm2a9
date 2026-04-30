@@ -112,10 +112,11 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
     x += columnWidths[8];
     page.drawText(product.notes || "", { x: x, y: y, font: fallbackFont, size: fontSize });
     y -= 20;
-
     if (y < margin) {
-      page.addPage();
+      // نطلب من المستند إضافة صفحة جديدة وتعيينها للمتغير page
+      page = pdfDoc.addPage([width, height]); 
       y = height - margin;
+      
       // إعادة رسم رأس الجدول للصفحة الجديدة
       x = margin;
       for (let j = 0; j < tableHeaders.length; j++) {
@@ -125,8 +126,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
       y -= 15;
       page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
       y -= 10;
-    }
-  }
+    }}
 
   // الإجمالي الكلي
   y -= 20;
