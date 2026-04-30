@@ -39,8 +39,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-  const page = pdfDoc.addPage();
-
+  let page = pdfDoc.addPage(); // استخدم let وليس const
   const { width, height } = page.getSize();
   let y = height - 50;
   const margin = 50;
@@ -112,12 +111,13 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
     x += columnWidths[8];
     page.drawText(product.notes || "", { x: x, y: y, font: fallbackFont, size: fontSize });
     y -= 20;
+
     if (y < margin) {
-      // نطلب من المستند إضافة صفحة جديدة وتعيينها للمتغير page
+      // التعديل هنا: نطلب من المستند إضافة صفحة جديدة ونخزنها في المتغير page
       page = pdfDoc.addPage([width, height]); 
       y = height - margin;
       
-      // إعادة رسم رأس الجدول للصفحة الجديدة
+      // إعادة رسم رأس الجدول للصفحة الجديدة لكي يعرف المستخدم محتوى الأعمدة
       x = margin;
       for (let j = 0; j < tableHeaders.length; j++) {
         page.drawText(tableHeaders[j], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
@@ -126,7 +126,8 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
       y -= 15;
       page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
       y -= 10;
-    }}
+    }
+  }
 
   // الإجمالي الكلي
   y -= 20;
