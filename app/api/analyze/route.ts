@@ -1,7 +1,7 @@
 // app/api/analyze/route.ts
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  Universal Inventory Intelligence Engine — v3.0              ║
-// ║  Gemini 1.5 Flash (Batch-compatible) · Arabic-first         ║
+// ║  Universal Inventory Intelligence Engine — v4.0              ║
+// ║  Gemini 2.5 Flash · Arabic-first · Editable Output          ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 import { NextRequest, NextResponse } from "next/server";
@@ -13,8 +13,6 @@ import type { InventoryAnalysisResult, ProductItem, Confidence } from "../../typ
 // ──────────────────────────────────────────────────────────────
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
-
-/** نستخدم gemini-1.5-flash لأنه متوافق مع Batch API وأسرع + أرخص */
 const MODEL_NAME = "gemini-2.5-flash";
 
 const MAX_IMAGE_SIZE_MB   = 4;
@@ -22,11 +20,8 @@ const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 const MAX_BODY_BYTES      = 10 * 1024 * 1024;
 const ALLOWED_MIME_TYPES  = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-// إعادة المحاولة عند 429 — Exponential back-off
 const MAX_RETRIES          = 4;
-const BASE_RETRY_DELAY_MS  = 3000; // 3 ثوانٍ
-
-// حد التكرار لتجميع الأسعار دفعة واحدة
+const BASE_RETRY_DELAY_MS  = 3000;
 const BATCH_PRICE_THRESHOLD = 6;
 const MAX_PARALLEL_CHUNKS   = 3;
 
@@ -66,7 +61,7 @@ interface UniqueProductEntry {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 3. GEO + CURRENCY DATABASE
+// 3. GEO + CURRENCY DATABASE (30+ عملة)
 // ──────────────────────────────────────────────────────────────
 
 const CURRENCY_DB: Record<string, CurrencyInfo> = {
@@ -90,6 +85,17 @@ const CURRENCY_DB: Record<string, CurrencyInfo> = {
   CN: { code: "CNY", symbol: "¥",  nameEn: "Chinese Yuan",         nameAr: "يوان صيني",             exchangeRateToUSD: 7.25  },
   DE: { code: "EUR", symbol: "€",  nameEn: "Euro",                 nameAr: "يورو",                  exchangeRateToUSD: 1.09  },
   FR: { code: "EUR", symbol: "€",  nameEn: "Euro",                 nameAr: "يورو",                  exchangeRateToUSD: 1.09  },
+  JP: { code: "JPY", symbol: "¥",  nameEn: "Japanese Yen",         nameAr: "ين ياباني",             exchangeRateToUSD: 154   },
+  KR: { code: "KRW", symbol: "₩",  nameEn: "South Korean Won",     nameAr: "وون كوري",              exchangeRateToUSD: 1370  },
+  RU: { code: "RUB", symbol: "₽",  nameEn: "Russian Ruble",        nameAr: "روبل روسي",             exchangeRateToUSD: 92    },
+  CA: { code: "CAD", symbol: "$",  nameEn: "Canadian Dollar",      nameAr: "دولار كندي",            exchangeRateToUSD: 1.37  },
+  AU: { code: "AUD", symbol: "$",  nameEn: "Australian Dollar",    nameAr: "دولار أسترالي",         exchangeRateToUSD: 0.66  },
+  BR: { code: "BRL", symbol: "R$", nameEn: "Brazilian Real",       nameAr: "ريال برازيلي",          exchangeRateToUSD: 5.15  },
+  MX: { code: "MXN", symbol: "$",  nameEn: "Mexican Peso",         nameAr: "بيزو مكسيكي",           exchangeRateToUSD: 17.2  },
+  ZA: { code: "ZAR", symbol: "R",  nameEn: "South African Rand",   nameAr: "راند جنوب أفريقي",      exchangeRateToUSD: 18.7  },
+  NG: { code: "NGN", symbol: "₦",  nameEn: "Nigerian Naira",       nameAr: "نايرا نيجيري",          exchangeRateToUSD: 1480  },
+  MY: { code: "MYR", symbol: "RM", nameEn: "Malaysian Ringgit",    nameAr: "رينغيت ماليزي",         exchangeRateToUSD: 4.73  },
+  ID: { code: "IDR", symbol: "Rp", nameEn: "Indonesian Rupiah",    nameAr: "روبية إندونيسية",       exchangeRateToUSD: 16000 },
 };
 
 const COUNTRY_NAMES: Record<string, { ar: string; en: string; lang: "ar" | "en" }> = {
@@ -119,25 +125,26 @@ const DEFAULT_COUNTRY = "EG";
 
 // ──────────────────────────────────────────────────────────────
 // 4. CONTEXT RESOLUTION
-//    يقرأ رأس x-vercel-ip-country أولاً، ثم CF-IPCountry،
-//    ثم x-country-override من الـ body (للتطوير المحلي)
 // ──────────────────────────────────────────────────────────────
 
-function resolveGeoContext(request: NextRequest, bodyCountry?: string): GeoContext {
-  const headerCountry =
-    request.headers.get("x-vercel-ip-country") ||
-    request.headers.get("cf-ipcountry") ||
-    null;
+async function resolveGeoContext(request: NextRequest, bodyCountry?: string): Promise<GeoContext> {
+  let countryCode = DEFAULT_COUNTRY;
+  
+  try {
+    // محاولة آمنة للحصول على الهيدرز
+    const vercelCountry = request.headers.get("x-vercel-ip-country");
+    const cfCountry = request.headers.get("cf-ipcountry");
+    countryCode = (bodyCountry ?? vercelCountry ?? cfCountry ?? DEFAULT_COUNTRY).toUpperCase();
+  } catch (error) {
+    console.warn("Could not get country from headers, using default");
+  }
 
-  // الأولوية: body override (تطوير) → Vercel header → CF header → افتراضي
-  const code = (bodyCountry ?? headerCountry ?? DEFAULT_COUNTRY).toUpperCase();
-
-  const names    = COUNTRY_NAMES[code]    ?? COUNTRY_NAMES[DEFAULT_COUNTRY];
-  const currency = CURRENCY_DB[code]      ?? CURRENCY_DB[DEFAULT_COUNTRY];
+  const names    = COUNTRY_NAMES[countryCode]    ?? COUNTRY_NAMES[DEFAULT_COUNTRY];
+  const currency = CURRENCY_DB[countryCode]      ?? CURRENCY_DB[DEFAULT_COUNTRY];
   const lang     = names.lang;
 
   return {
-    countryCode:   code,
+    countryCode,
     countryNameAr: names.ar,
     countryNameEn: names.en,
     currency,
@@ -149,18 +156,15 @@ function resolveGeoContext(request: NextRequest, bodyCountry?: string): GeoConte
 // 5. SECURITY HELPERS
 // ──────────────────────────────────────────────────────────────
 
-/** التحقق من صحة base64 مع رفض البيانات الخطرة */
 function validateBase64(str: string): boolean {
   if (!str || str.length > MAX_BODY_BYTES) return false;
 
-  // رفض أي محاولة لحقن بيانات خطرة داخل سلسلة base64
   const FORBIDDEN = ["../", "..\\", "\0", "%00", "<script", "javascript:", "data:text/html"];
-  const lower = str.slice(0, 200).toLowerCase(); // نفحص البداية فقط لأداء أفضل
+  const lower = str.slice(0, 200).toLowerCase();
   for (const pattern of FORBIDDEN) {
     if (lower.includes(pattern)) return false;
   }
 
-  // تحقق سريع: base64 يحتوي فقط على [A-Za-z0-9+/=]
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(str)) return false;
 
   try {
@@ -171,7 +175,6 @@ function validateBase64(str: string): boolean {
   }
 }
 
-/** تعقيم النص لمنع XSS وحقن البيانات */
 function sanitize(text: unknown, maxLen = 500): string {
   if (!text || typeof text !== "string") return "";
   return text
@@ -199,7 +202,6 @@ async function withRetry<T>(
       /quota|rate.?limit|resource.?exhausted/i.test(err?.message ?? "");
 
     if (isRateLimit && attempt < MAX_RETRIES) {
-      // Jitter: تأخير عشوائي ± 20% لتجنب thundering herd
       const base  = BASE_RETRY_DELAY_MS * 2 ** attempt;
       const jitter = base * 0.2 * (Math.random() - 0.5) * 2;
       const delay  = Math.round(base + jitter);
@@ -213,7 +215,7 @@ async function withRetry<T>(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 7. JSON EXTRACTION (robust against markdown fences)
+// 7. JSON EXTRACTION
 // ──────────────────────────────────────────────────────────────
 
 function extractJSON<T>(raw: string): T {
@@ -224,7 +226,6 @@ function extractJSON<T>(raw: string): T {
     .replace(/```\s*/g, "")
     .trim();
 
-  // إيجاد أول `{` أو `[` وآخر `}` أو `]`
   const objStart  = text.indexOf("{");
   const objEnd    = text.lastIndexOf("}");
   const arrStart  = text.indexOf("[");
@@ -242,7 +243,7 @@ function extractJSON<T>(raw: string): T {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 8. PRODUCT DEDUPLICATION (لتوفير استدعاءات API للأسعار)
+// 8. PRODUCT DEDUPLICATION
 // ──────────────────────────────────────────────────────────────
 
 function deduplicateForPricing(
@@ -277,7 +278,7 @@ function deduplicateForPricing(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 9. PRICE FETCHING — BATCH (single call for ≥ threshold items)
+// 9. PRICE FETCHING — BATCH & PARALLEL
 // ──────────────────────────────────────────────────────────────
 
 async function fetchPricesBatch(
@@ -331,7 +332,6 @@ Rules:
     console.warn("[PRICES] Batch parse failed, falling back to nulls");
   }
 
-  // تأمين: أي منتج لم يُعطَ سعر → null
   for (const entry of unique) {
     if (!results.has(entry.key)) {
       results.set(entry.key, { price: null, confidence: "low", source: "unavailable" });
@@ -341,10 +341,6 @@ Rules:
   return results;
 }
 
-// ──────────────────────────────────────────────────────────────
-// 10. PRICE FETCHING — PARALLEL CHUNKS (for small counts)
-// ──────────────────────────────────────────────────────────────
-
 async function fetchPricesParallel(
   unique: UniqueProductEntry[],
   currencyCode: string
@@ -352,7 +348,6 @@ async function fetchPricesParallel(
   const results = new Map<string, PriceInfo>();
   const model   = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-  // تقسيم إلى chunks لتجنب إغراق API
   for (let i = 0; i < unique.length; i += MAX_PARALLEL_CHUNKS) {
     const chunk   = unique.slice(i, i + MAX_PARALLEL_CHUNKS);
     const fetched = await Promise.allSettled(
@@ -382,7 +377,6 @@ FORMAT: {"price": <number or null>, "confidence": "high|medium|low", "source": "
     }
   }
 
-  // تأمين fallback
   for (const entry of unique) {
     if (!results.has(entry.key)) {
       results.set(entry.key, { price: null, confidence: "low", source: "fetch_failed" });
@@ -392,10 +386,6 @@ FORMAT: {"price": <number or null>, "confidence": "high|medium|low", "source": "
   return results;
 }
 
-// ──────────────────────────────────────────────────────────────
-// 11. ORCHESTRATE PRICE FETCHING
-// ──────────────────────────────────────────────────────────────
-
 async function fetchMarketPrices(
   products: Array<{ product_name: string; brand: string | null; category?: string }>,
   currencyCode: string
@@ -404,7 +394,7 @@ async function fetchMarketPrices(
     return { priceMap: new Map(), savedCalls: 0, uniqueCount: 0 };
   }
 
-  const { unique, indexToKey } = deduplicateForPricing(products);
+  const { unique } = deduplicateForPricing(products);
   const savedCalls = products.length - unique.length;
 
   console.log(
@@ -420,7 +410,7 @@ async function fetchMarketPrices(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 12. MASTER PROMPT BUILDER
+// 10. MASTER PROMPT BUILDER (أكثر دقة)
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
@@ -429,60 +419,86 @@ function buildMasterPrompt(ctx: GeoContext): string {
   const symbol     = ctx.currency.symbol;
   const country    = ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn;
 
-  return `أنت "محرك الجرد البصري الشامل" (Universal Visual Inventory Engine).
-السياق: المستخدم في ${country} — العملة: ${currency} (${symbol}) — اللغة: ${lang}
+  return `أنت "محرك الجرد البصري الشامل فائق الدقة" (Ultra-Precise Universal Visual Inventory Engine).
 
-═══════════════════════════════════════════════════
-▌ المهمة
-═══════════════════════════════════════════════════
-حلّل الصورة المرفقة وأجرِ جرداً احترافياً شاملاً لكل الأصناف المرئية.
+═══════════════════════════════════════════════════════════════════
+📍 السياق: المستخدم في ${country}
+💰 العملة: ${currency} (${symbol})
+🗣️ اللغة المستهدفة: ${lang}
+═══════════════════════════════════════════════════════════════════
 
-═══════════════════════════════════════════════════
-▌ نطاق الجرد (شامل لجميع القطاعات)
-═══════════════════════════════════════════════════
-• تجزئة وسوبرماركت: أطعمة، مشروبات، علب، أسعار، باركود، تواريخ صلاحية
-• أدوات ومعدات: أدوات كهربائية ويدوية (Bosch, Makita...)، قدرة، موديل
-• أثاث وديكور: كراسي، طاولات، خزائن، الخامة واللون
-• لوجستيات: صناديق، حاويات، Pallets، رموز الشحن
-• صيدلة: أدوية، جرعة، تركيز، باركود طبي
-• ملابس وموضة: مقاسات، ماركات، ألوان
-• إلكترونيات: هواتف، شاشات، سيريال نمبر
+🎯 المهمة الأساسية:
+قم بتحليل الصورة المرفقة بدقة متناهية وأجرِ جرداً كاملاً لكل المنتجات المرئية.
 
-═══════════════════════════════════════════════════
-▌ قواعد صارمة (لا استثناء)
-═══════════════════════════════════════════════════
-1. أخرج JSON فقط — لا نص خارجه أبداً
-2. لا تختلق منتجات غير مرئية (Zero Hallucination)
-3. استخدم ${lang} لجميع النصوص (اسم المنتج، التصنيف، الملاحظات)
-4. اترك unit_price كـ null (سيُحسب لاحقاً بسعر السوق الحي)
-5. حلّل كل ركن في الصورة بدقة
+═══════════════════════════════════════════════════════════════════
+📋 قائمة القطاعات المدعومة (مع أمثلة):
+═══════════════════════════════════════════════════════════════════
+1. التجزئة والسوبرماركت: أطعمة، مشروبات معلبة، منتجات ألبان، أسعار على الرفوف
+2. الأدوات والمعدات: دريلات، مناشير، عدد يدوية، معدات صناعية
+3. الأثاث والديكور: كراسي، طاولات، خزائن، إضاءة، سجاد
+4. الخدمات اللوجستية: صناديق كرتون، باليتات، منصات شحن، باركود شحن
+5. الصيدليات: أدوية، مكملات غذائية، مستلزمات طبية، باركود دوائي
+6. الملابس والأزياء: قمصان، بناطيل، أحذية، شنط، ماركات
+7. الإلكترونيات: جوالات، لابتوبات، أجهزة لوحية، شاشات، مكونات إلكترونية
+8. السيارات وقطع الغيار: إطارات، بطاريات، زينة، قطع غيار
+9. أي مخزون آخر غير مصنف
 
-═══════════════════════════════════════════════════
-▌ مخرجات JSON المطلوبة (هذا الشكل حرفياً)
-═══════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════════
+⚠️ قواعد صارمة جداً (تطبق بصرامة عالية):
+═══════════════════════════════════════════════════════════════════
+1. أخرج JSON فقط — لا تضع أي نص قبله أو بعده
+2. لا تختلق منتجات غير مرئية في الصورة (Zero Hallucination)
+3. استخدم اللغة ${lang} لجميع الحقول النصية
+4. اترك unit_price = null (سيتم جلب السعر لاحقاً من السوق)
+5. حدد الكمية (quantity) بدقة بناءً على العناصر المرئية
+6. عند وجود عدة عناصر متطابقة، احسب الكمية الإجمالية
+7. حدد مستوى الثقة (confidence) بصراحة:
+   - high: المنتج واضح تماماً والمعلومات مؤكدة
+   - medium: المنتج واضح ولكن بعض التفاصيل غير مؤكدة
+   - low: المنتج غير واضح أو غير مكتمل
+
+═══════════════════════════════════════════════════════════════════
+🔍 نصائح لتحليل أكثر دقة:
+═══════════════════════════════════════════════════════════════════
+- إذا كان المنتج مكرراً (مثل 5 علب كوكاكولا)، ضع quantity = 5 و product واحد
+- اقرأ الأسعار المكتوبة على المنتجات إذا كانت مرئية (سيتم استخدامها لاحقاً)
+- حدد الماركة التجارية إذا كانت ظاهرة (Apple, Samsung, Nike...)
+- لاحظ تواريخ الصلاحية إذا كانت مرئية وأضفها في حقل notes
+- انتبه للحالة (جديد، مستعمل، معروض للبيع، تالف)
+
+═══════════════════════════════════════════════════════════════════
+📤 مخرجات JSON المطلوبة (استخدم هذا القالب حرفياً):
+═══════════════════════════════════════════════════════════════════
 {
   "business_type": "نوع النشاط التجاري",
   "analysis_quality": "excellent | good | fair | poor",
-  "detected_items_count": <number>,
+  "detected_items_count": 0,
   "products": [
     {
-      "product_name": "اسم المنتج",
-      "brand": "الماركة أو null",
-      "category": "التصنيف",
+      "product_name": "الاسم الدقيق للمنتج باللغة ${lang}",
+      "brand": "اسم الماركة أو null",
+      "category": "التصنيف المناسب",
       "unit_price": null,
-      "quantity": <number>,
-      "barcode_serial": "الباركود أو null",
+      "quantity": 1,
+      "barcode_serial": "الباركود أو الرقم التسلسلي أو null",
       "confidence": "high | medium | low",
-      "notes": "تفاصيل: مقاس، حالة، لون، صلاحية..."
+      "notes": "تفاصيل إضافية: المقاس، اللون، السعة، الحالة، تاريخ الصلاحية، ملاحظات أخرى"
     }
   ],
-  "warnings": ["أي ملاحظات تحذيرية"],
-  "suggestions": ["مقترحات لتحسين الجرد"]
-}`;
+  "warnings": ["أي تحذيرات متعلقة بجودة الصورة أو عدم وضوح بعض العناصر"],
+  "suggestions": ["اقتراحات لتحسين الجرد مستقبلاً"]
+}
+
+═══════════════════════════════════════════════════════════════════
+✅ تذكير أخير:
+- دقة التحليل هي أولويتنا الأولى
+- كمية المنتجات (quantity) يجب أن تعكس العدد الحقيقي في الصورة
+- إذا كانت الصورة فارغة أو ذات جودة سيئة، أعد analysis_quality: "poor" وقائمة منتجات فارغة
+═══════════════════════════════════════════════════════════════════`;
 }
 
 // ──────────────────────────────────────────────────────────────
-// 13. IMAGE PROCESSING HELPER
+// 11. IMAGE PROCESSING & VALIDATION
 // ──────────────────────────────────────────────────────────────
 
 function processImageInput(image: string): { base64: string; mimeType: string } {
@@ -504,7 +520,7 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 }
 
 // ──────────────────────────────────────────────────────────────
-// 14. PRODUCT SANITIZER
+// 12. PRODUCT SANITIZER
 // ──────────────────────────────────────────────────────────────
 
 function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
@@ -518,7 +534,7 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
     product_name:   sanitize(raw.product_name || unknownLabel, 300),
     brand:          raw.brand ? sanitize(raw.brand, 150) : null,
     category:       sanitize(raw.category || generalLabel, 150),
-    unit_price:     null, // يُملأ لاحقاً
+    unit_price:     null,
     quantity:       typeof raw.quantity === "number" && raw.quantity > 0
                       ? Math.floor(raw.quantity)
                       : 1,
@@ -529,21 +545,19 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 15. POST HANDLER — MAIN ENGINE
+// 13. POST HANDLER — مع دعم قابلية التعديل اليدوي
 // ──────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
 
-  // ── أ. التحقق من مفتاح API ──────────────────────────────────
   if (!process.env.GEMINI_API_KEY?.trim()) {
     return NextResponse.json(
-      { success: false, error: "مفتاح Gemini API غير موجود. تحقق من متغيرات البيئة." },
+      { success: false, error: "مفتاح Gemini API غير موجود" },
       { status: 500 }
     );
   }
 
-  // ── ب. التحقق من حجم الطلب ─────────────────────────────────
   const contentLen = Number(request.headers.get("content-length") ?? 0);
   if (contentLen > MAX_BODY_BYTES) {
     return NextResponse.json(
@@ -552,11 +566,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── ج. قراءة الـ body ───────────────────────────────────────
   let body: {
     image?:           string;
     fetch_prices?:    boolean;
-    country_override?: string; // للتطوير المحلي فقط
+    country_override?: string;
   };
 
   try {
@@ -577,15 +590,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── د. تحديد السياق الجغرافي ───────────────────────────────
-  const ctx = resolveGeoContext(request, country_override);
+  const ctx = await resolveGeoContext(request, country_override);
 
-  // ── هـ. معالجة الصورة وتحقق الأمان ────────────────────────
   const { base64, mimeType } = processImageInput(image);
 
   if (!validateBase64(base64)) {
     return NextResponse.json(
-      { success: false, error: "صيغة الصورة غير صالحة أو تحتوي على بيانات خطرة." },
+      { success: false, error: "صيغة الصورة غير صالحة." },
       { status: 400 }
     );
   }
@@ -593,19 +604,19 @@ export async function POST(request: NextRequest) {
   const imageBytes = Buffer.byteLength(base64, "base64");
   if (imageBytes > MAX_IMAGE_BYTES) {
     return NextResponse.json(
-      { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB. يرجى ضغط الصورة.` },
+      { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB.` },
       { status: 413 }
     );
   }
 
-  // ── و. تحليل الصورة بـ Gemini 1.5 Flash ────────────────────
+  // تحليل الصورة
   let parsedAI: any;
   try {
     const model = genAI.getGenerativeModel({
       model: MODEL_NAME,
       generationConfig: {
         responseMimeType: "application/json",
-        temperature:      0.05, // دقة قصوى، لا تخيل
+        temperature:      0.05,
         topP:             0.9,
         topK:             32,
       },
@@ -626,29 +637,25 @@ export async function POST(request: NextRequest) {
 
     if (err?.status === 429) {
       return NextResponse.json(
-        {
-          success:     false,
-          error:       "تم تجاوز حد استخدام API. انتظر دقيقة واحدة ثم أعد المحاولة.",
-          retry_after: 60,
-        },
+        { success: false, error: "تم تجاوز حد الاستخدام. انتظر وأعد المحاولة.", retry_after: 60 },
         { status: 429 }
       );
     }
 
     return NextResponse.json(
-      { success: false, error: "فشل تحليل الصورة. تأكد من وضوحها وأعد المحاولة." },
+      { success: false, error: "فشل تحليل الصورة. تأكد من وضوحها." },
       { status: 500 }
     );
   }
 
-  // ── ز. تعقيم المنتجات ──────────────────────────────────────
+  // تنقية المنتجات
   const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
   let products: ProductItem[] = rawProducts.map(p => sanitizeProduct(p, ctx.lang));
 
-  // ── ح. جلب أسعار السوق الحية ───────────────────────────────
-  let pricesFetched  = false;
-  let savedCalls     = 0;
-  let uniqueCount    = 0;
+  // جلب الأسعار
+  let pricesFetched = false;
+  let savedCalls = 0;
+  let uniqueCount = 0;
 
   if (fetch_prices && products.length > 0) {
     try {
@@ -657,27 +664,22 @@ export async function POST(request: NextRequest) {
         ctx.currency.code
       );
 
-      savedCalls  = sc;
+      savedCalls = sc;
       uniqueCount = uc;
 
-      // إسناد الأسعار
       products = products.map(p => {
-        const key  = `${p.product_name.trim().toLowerCase()}|${(p.brand ?? "").trim().toLowerCase()}`;
+        const key = `${p.product_name.trim().toLowerCase()}|${(p.brand ?? "").trim().toLowerCase()}`;
         const info = priceMap.get(key);
-        return {
-          ...p,
-          unit_price: info?.price ?? null,
-        };
+        return { ...p, unit_price: info?.price ?? null };
       });
 
       pricesFetched = products.some(p => p.unit_price !== null);
     } catch (priceErr) {
       console.warn("[PRICES] Failed to fetch prices:", priceErr);
-      // لا نفشل الطلب بأكمله بسبب فشل الأسعار
     }
   }
 
-  // ── ط. الإحصائيات المالية ──────────────────────────────────
+  // حساب الإجمالي
   const totalValue = products.reduce((sum, p) => {
     return p.unit_price ? sum + p.unit_price * (p.quantity ?? 1) : sum;
   }, 0);
@@ -687,48 +689,62 @@ export async function POST(request: NextRequest) {
     { minimumFractionDigits: 2, maximumFractionDigits: 2 }
   ).format(totalValue);
 
-  // ── ي. بناء الاستجابة ──────────────────────────────────────
   const analysisQuality =
     ["excellent", "good", "fair", "poor"].includes(parsedAI.analysis_quality)
       ? parsedAI.analysis_quality
       : "fair";
 
-  const response: InventoryAnalysisResult & Record<string, any> = {
-    success:              true,
-    business_type:        sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
-    analysis_quality:     analysisQuality,
+  // بناء الاستجابة مع إمكانية التعديل اليدوي
+  const response = {
+    success: true,
+    editable: true, // إشارة إلى أن المخرجات قابلة للتعديل يدوياً
+    business_type: sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
+    analysis_quality: analysisQuality,
     detected_items_count: products.length,
-    products,
-    warnings:             Array.isArray(parsedAI.warnings)
-                            ? parsedAI.warnings.slice(0, 10).map((w: any) => sanitize(w))
-                            : [],
-    suggestions:          Array.isArray(parsedAI.suggestions)
-                            ? parsedAI.suggestions.slice(0, 5).map((s: any) => sanitize(s))
-                            : [],
-    detected_location:    ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn,
-    timestamp:            new Date().toISOString(),
+    products: products.map(p => ({
+      ...p,
+      _editable_fields: ["quantity", "unit_price", "product_name", "notes"] // حقول قابلة للتعديل
+    })),
+    warnings: Array.isArray(parsedAI.warnings) ? parsedAI.warnings.slice(0, 10).map((w: any) => sanitize(w)) : [],
+    suggestions: Array.isArray(parsedAI.suggestions) ? parsedAI.suggestions.slice(0, 5).map((s: any) => sanitize(s)) : [],
+    detected_location: ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn,
+    timestamp: new Date().toISOString(),
 
     // معلومات العملة
     currency_info: {
-      code:   ctx.currency.code,
+      code: ctx.currency.code,
       symbol: ctx.currency.symbol,
-      name:   ctx.lang === "ar" ? ctx.currency.nameAr : ctx.currency.nameEn,
+      name: ctx.lang === "ar" ? ctx.currency.nameAr : ctx.currency.nameEn,
       exchange_rate_to_usd: ctx.currency.exchangeRateToUSD,
     },
 
-    // القيمة الإجمالية
-    total_estimated_value:           totalValue,
+    // القيم المالية
+    total_estimated_value: totalValue,
     total_estimated_value_formatted: `${ctx.currency.symbol}${formattedTotal}`,
 
-    // مقاييس الأداء (للتطوير والمراقبة)
+    // تعليمات التعديل اليدوي
+    edit_instructions: {
+      ar: "يمكنك تعديل الكمية (quantity) والسعر (unit_price) يدوياً في الواجهة الأمامية",
+      en: "You can manually edit quantity and unit_price in the frontend"
+    },
+
+    // بيانات أولية للمساعدة في التعديل
+    _raw_ai_response: {
+      business_type: parsedAI.business_type,
+      analysis_quality: parsedAI.analysis_quality,
+      warnings_count: parsedAI.warnings?.length || 0,
+      suggestions_count: parsedAI.suggestions?.length || 0
+    },
+
+    // مقاييس الأداء
     _meta: {
-      engine:              "Universal Inventory Intelligence v3",
-      model:               MODEL_NAME,
-      duration_ms:         Date.now() - startTime,
-      prices_fetched:      pricesFetched,
-      unique_products:     uniqueCount,
-      saved_api_calls:     savedCalls,
-      country_detected:    ctx.countryCode,
+      engine: "Universal Inventory Intelligence v4.0",
+      model: MODEL_NAME,
+      duration_ms: Date.now() - startTime,
+      prices_fetched: pricesFetched,
+      unique_products: uniqueCount,
+      saved_api_calls: savedCalls,
+      country_detected: ctx.countryCode,
     },
   };
 
@@ -736,31 +752,40 @@ export async function POST(request: NextRequest) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 16. GET HANDLER — Health Check
+// 14. GET HANDLER
 // ──────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
-  const ctx = resolveGeoContext(request);
+  const ctx = await resolveGeoContext(request);
 
   return NextResponse.json({
-    status:      "online",
-    engine:      "Universal Inventory Intelligence",
-    version:     "3.0.0",
-    model:       MODEL_NAME,
-    timestamp:   new Date().toISOString(),
+    status: "online",
+    status_ar: "متصل",
+    engine: "Universal Inventory Intelligence",
+    engine_ar: "محرك الجرد الذكي الشامل",
+    version: "4.0.0",
+    model: MODEL_NAME,
+    timestamp: new Date().toISOString(),
+    editable_output: true,
+    edit_instructions: {
+      ar: "يمكنك تعديل الكميات والأسعار يدوياً بعد استلام النتيجة. الحقول القابلة للتعديل: quantity, unit_price, product_name, notes",
+      en: "You can manually edit quantities and prices after receiving the result. Editable fields: quantity, unit_price, product_name, notes"
+    },
     features: {
-      auto_geo_detection:    true,
-      live_market_prices:    true,
-      batch_price_fetching:  true,
-      deduplication:         true,
-      exponential_backoff:   true,
-      arabic_first:          true,
-      zero_hallucination:    true,
+      auto_geo_detection: true,
+      live_market_prices: true,
+      batch_price_fetching: true,
+      deduplication: true,
+      exponential_backoff: true,
+      arabic_first: true,
+      zero_hallucination: true,
+      manual_editing_support: true
     },
     detected_context: {
-      country:  ctx.countryNameEn,
+      country: ctx.countryNameEn,
+      country_ar: ctx.countryNameAr,
       currency: ctx.currency.code,
-      lang:     ctx.lang,
+      lang: ctx.lang,
     },
     supported_industries: [
       "Retail & Supermarkets",
@@ -770,6 +795,8 @@ export async function GET(request: NextRequest) {
       "Fashion & Apparel",
       "Electronics & Tech",
       "Furniture & Decor",
+      "Auto Parts",
+      "General Inventory"
     ],
   });
 }
