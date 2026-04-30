@@ -15,7 +15,7 @@ import type { InventoryAnalysisResult, ProductItem, Confidence } from "../../typ
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 
 /** نستخدم gemini-1.5-flash لأنه متوافق مع Batch API وأسرع + أرخص */
-const MODEL_NAME = "gemini-1.5-flash";
+const MODEL_NAME = "gemini-2.5-flash";
 
 const MAX_IMAGE_SIZE_MB   = 4;
 const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
