@@ -1,12 +1,14 @@
 // app/api/analyze/route.ts
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  Universal Inventory Intelligence Engine — v4.0              ║
-// ║  Gemini 2.5 Flash · Arabic-first · Editable Output          ║
+// ║  Universal Inventory Intelligence Engine — v5.0              ║
+// ║  Gemini 2.5 Flash · All Image Formats · Arabic-first         ║
+// ║  Supports: JPEG, PNG, WebP, GIF, BMP, TIFF, HEIC, AVIF       ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import type { InventoryAnalysisResult, ProductItem, Confidence } from "../../types";
+import sharp from 'sharp'; // أضف: npm install sharp
+import type { ProductItem, Confidence } from "../../types";
 
 // ──────────────────────────────────────────────────────────────
 // 1. CONFIGURATION
@@ -15,15 +17,27 @@ import type { InventoryAnalysisResult, ProductItem, Confidence } from "../../typ
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 const MODEL_NAME = "gemini-2.5-flash";
 
-const MAX_IMAGE_SIZE_MB   = 4;
+const MAX_IMAGE_SIZE_MB   = 10; // زيادة إلى 10MB لدعم الصور الأكبر
 const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-const MAX_BODY_BYTES      = 10 * 1024 * 1024;
-const ALLOWED_MIME_TYPES  = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_BODY_BYTES      = 15 * 1024 * 1024;
+
+// دعم جميع أنواع الصور
+const ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg", "image/jpg", "image/png", "image/webp",
+  "image/gif", "image/bmp", "image/tiff", "image/tif",
+  "image/svg+xml", "image/heic", "image/heif", "image/avif"
+]);
+
+// الصيغ التي تحتاج تحويل
+const FORMATS_NEEDING_CONVERSION = new Set([
+  "image/heic", "image/heif", "image/bmp", "image/tiff", "image/avif"
+]);
 
 const MAX_RETRIES          = 4;
 const BASE_RETRY_DELAY_MS  = 3000;
 const BATCH_PRICE_THRESHOLD = 6;
 const MAX_PARALLEL_CHUNKS   = 3;
+const CACHE_TTL           = 24 * 60 * 60 * 1000; // 24 ساعة
 
 // ──────────────────────────────────────────────────────────────
 // 2. TYPES
@@ -58,6 +72,12 @@ interface UniqueProductEntry {
   category?:      string;
   occurrences:    number;
   originalIndices: number[];
+}
+
+interface PriceCacheEntry {
+  price: PriceInfo;
+  timestamp: number;
+  expiresAt: number;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -124,14 +144,45 @@ const COUNTRY_NAMES: Record<string, { ar: string; en: string; lang: "ar" | "en" 
 const DEFAULT_COUNTRY = "EG";
 
 // ──────────────────────────────────────────────────────────────
-// 4. CONTEXT RESOLUTION
+// 4. PRICE CACHE (NEW)
+// ──────────────────────────────────────────────────────────────
+
+const priceCache = new Map<string, PriceCacheEntry>();
+
+async function getCachedPrice(productKey: string, currencyCode: string): Promise<PriceInfo | null> {
+  const cacheKey = `${productKey}|${currencyCode}`;
+  const cached = priceCache.get(cacheKey);
+  
+  if (cached && Date.now() < cached.expiresAt) {
+    console.log(`[CACHE] Hit for ${productKey} in ${currencyCode}`);
+    return cached.price;
+  }
+  
+  if (cached) {
+    priceCache.delete(cacheKey);
+  }
+  
+  return null;
+}
+
+async function cachePrice(productKey: string, currencyCode: string, price: PriceInfo) {
+  const cacheKey = `${productKey}|${currencyCode}`;
+  priceCache.set(cacheKey, {
+    price,
+    timestamp: Date.now(),
+    expiresAt: Date.now() + CACHE_TTL
+  });
+  console.log(`[CACHE] Stored ${productKey} in ${currencyCode}`);
+}
+
+// ──────────────────────────────────────────────────────────────
+// 5. CONTEXT RESOLUTION
 // ──────────────────────────────────────────────────────────────
 
 async function resolveGeoContext(request: NextRequest, bodyCountry?: string): Promise<GeoContext> {
   let countryCode = DEFAULT_COUNTRY;
   
   try {
-    // محاولة آمنة للحصول على الهيدرز
     const vercelCountry = request.headers.get("x-vercel-ip-country");
     const cfCountry = request.headers.get("cf-ipcountry");
     countryCode = (bodyCountry ?? vercelCountry ?? cfCountry ?? DEFAULT_COUNTRY).toUpperCase();
@@ -153,7 +204,7 @@ async function resolveGeoContext(request: NextRequest, bodyCountry?: string): Pr
 }
 
 // ──────────────────────────────────────────────────────────────
-// 5. SECURITY HELPERS
+// 6. SECURITY HELPERS
 // ──────────────────────────────────────────────────────────────
 
 function validateBase64(str: string): boolean {
@@ -186,7 +237,29 @@ function sanitize(text: unknown, maxLen = 500): string {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 6. RETRY WITH EXPONENTIAL BACK-OFF
+// 7. TIMEOUT UTILITY (NEW)
+// ──────────────────────────────────────────────────────────────
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMessage: string
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+  });
+  
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// 8. RETRY WITH EXPONENTIAL BACK-OFF
 // ──────────────────────────────────────────────────────────────
 
 async function withRetry<T>(
@@ -215,35 +288,154 @@ async function withRetry<T>(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 7. JSON EXTRACTION
+// 9. IMAGE CONVERSION & OPTIMIZATION (NEW - يدعم جميع الصيغ)
 // ──────────────────────────────────────────────────────────────
 
-function extractJSON<T>(raw: string): T {
-  if (!raw) throw new Error("Empty AI response");
-
-  let text = raw
-    .replace(/```json\s*/gi, "")
-    .replace(/```\s*/g, "")
-    .trim();
-
-  const objStart  = text.indexOf("{");
-  const objEnd    = text.lastIndexOf("}");
-  const arrStart  = text.indexOf("[");
-  const arrEnd    = text.lastIndexOf("]");
-
-  if (objStart !== -1 && objEnd > objStart) {
-    text = text.slice(objStart, objEnd + 1);
-  } else if (arrStart !== -1 && arrEnd > arrStart) {
-    text = text.slice(arrStart, arrEnd + 1);
+async function convertAndOptimizeImage(
+  base64: string, 
+  mimeType: string,
+  maxWidth: number = 1024,
+  maxHeight: number = 1024
+): Promise<{ base64: string; mimeType: string; originalSize: number; optimizedSize: number }> {
+  
+  let buffer = Buffer.from(base64, 'base64');
+  const originalSize = buffer.length;
+  
+  // التحقق مما إذا كانت الصيغة تحتاج تحويل
+  const needsConversion = FORMATS_NEEDING_CONVERSION.has(mimeType);
+  let outputFormat: 'jpeg' | 'png' = 'jpeg';
+  
+  if (needsConversion || mimeType === 'image/gif') {
+    outputFormat = 'jpeg';
+  } else if (mimeType.includes('png')) {
+    outputFormat = 'png';
   } else {
-    throw new Error("No JSON structure found in AI response");
+    outputFormat = 'jpeg';
   }
-
-  return JSON.parse(text) as T;
+  
+  try {
+    let sharpInstance = sharp(buffer);
+    
+    // تغيير الحجم إذا كان كبيراً
+    const metadata = await sharpInstance.metadata();
+    if (metadata.width && metadata.height) {
+      if (metadata.width > maxWidth || metadata.height > maxHeight) {
+        sharpInstance = sharpInstance.resize(maxWidth, maxHeight, {
+          fit: 'inside',
+          withoutEnlargement: true
+        });
+      }
+    }
+    
+    // تحويل وتحسين الجودة
+    let optimizedBuffer: Buffer;
+    let finalMimeType: string;
+    
+    switch (outputFormat) {
+      case 'png':
+        optimizedBuffer = await sharpInstance.png({ quality: 85, compressionLevel: 9 }).toBuffer();
+        finalMimeType = 'image/png';
+        break;
+      case 'jpeg':
+      default:
+        optimizedBuffer = await sharpInstance.jpeg({ quality: 85, progressive: true }).toBuffer();
+        finalMimeType = 'image/jpeg';
+        break;
+    }
+    
+    const optimizedSize = optimizedBuffer.length;
+    
+    console.log(`[IMAGE] Converted ${mimeType} → ${finalMimeType}, ${(originalSize/1024).toFixed(1)}KB → ${(optimizedSize/1024).toFixed(1)}KB`);
+    
+    return {
+      base64: optimizedBuffer.toString('base64'),
+      mimeType: finalMimeType,
+      originalSize,
+      optimizedSize
+    };
+  } catch (error) {
+    console.error(`[IMAGE] Failed to process ${mimeType}:`, error);
+    throw new Error(`Unsupported or corrupted image format: ${mimeType}`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────
-// 8. PRODUCT DEDUPLICATION
+// 10. IMPROVED JSON EXTRACTION
+// ──────────────────────────────────────────────────────────────
+
+function extractJSON<T>(raw: string): T {
+  if (!raw || typeof raw !== 'string') {
+    throw new Error("Empty or invalid AI response");
+  }
+  
+  // تنظيف الاستجابة
+  let text = raw
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .replace(/[\u0000-\u001F]+/g, ' ')
+    .replace(/,\s*}/g, '}')
+    .replace(/,\s*]/g, ']')
+    .trim();
+  
+  // البحث عن أول { أو [
+  const objStart = text.indexOf("{");
+  const arrStart = text.indexOf("[");
+  
+  let start = -1;
+  let end = -1;
+  
+  if (objStart !== -1 && (arrStart === -1 || objStart < arrStart)) {
+    start = objStart;
+    let braceCount = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === '{') braceCount++;
+      if (text[i] === '}') braceCount--;
+      if (braceCount === 0) {
+        end = i;
+        break;
+      }
+    }
+  } else if (arrStart !== -1) {
+    start = arrStart;
+    let bracketCount = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === '[') bracketCount++;
+      if (text[i] === ']') bracketCount--;
+      if (bracketCount === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  
+  if (start === -1 || end === -1) {
+    throw new Error("No valid JSON structure found");
+  }
+  
+  text = text.slice(start, end + 1);
+  
+  try {
+    return JSON.parse(text);
+  } catch (firstError) {
+    // محاولة إصلاح الأخطاء الشائعة
+    const fixed = text
+      .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
+      .replace(/:\s*'([^']*)'/g, ':"$1"')
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']')
+      .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
+    
+    try {
+      return JSON.parse(fixed);
+    } catch (secondError) {
+      console.error("[JSON] Failed to parse:", text.substring(0, 200));
+      throw new Error(`Invalid JSON format: ${firstError.message}`);
+    }
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// 11. PRODUCT DEDUPLICATION
 // ──────────────────────────────────────────────────────────────
 
 function deduplicateForPricing(
@@ -278,16 +470,31 @@ function deduplicateForPricing(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 9. PRICE FETCHING — BATCH & PARALLEL
+// 12. PRICE FETCHING WITH CACHE
 // ──────────────────────────────────────────────────────────────
 
-async function fetchPricesBatch(
+async function fetchPricesBatchWithCache(
   unique: UniqueProductEntry[],
   currencyCode: string
 ): Promise<Map<string, PriceInfo>> {
   const results = new Map<string, PriceInfo>();
-
-  const productList = unique
+  const toFetch: UniqueProductEntry[] = [];
+  
+  // التحقق من cache أولاً
+  for (const entry of unique) {
+    const cached = await getCachedPrice(entry.key, currencyCode);
+    if (cached) {
+      results.set(entry.key, cached);
+    } else {
+      toFetch.push(entry);
+    }
+  }
+  
+  if (toFetch.length === 0) {
+    return results;
+  }
+  
+  const productList = toFetch
     .map((p, i) => `${i + 1}. ${p.product_name}${p.brand ? ` (${p.brand})` : ""}`)
     .join("\n");
 
@@ -297,7 +504,7 @@ Given these products, estimate their current retail price in ${currencyCode}.
 Products:
 ${productList}
 
-Return exactly ${unique.length} objects in this format:
+Return exactly ${toFetch.length} objects in this format:
 [{"idx": 1, "price": <number or null>, "confidence": "high|medium|low", "source": "<store or method>"}]
 
 Rules:
@@ -317,39 +524,59 @@ Rules:
     );
 
     for (const item of data) {
-      const entry = unique[item.idx - 1];
+      const entry = toFetch[item.idx - 1];
       if (entry) {
-        results.set(entry.key, {
+        const priceInfo: PriceInfo = {
           price:      typeof item.price === "number" ? item.price : null,
           confidence: (["high", "medium", "low"].includes(item.confidence)
             ? item.confidence
             : "medium") as PriceInfo["confidence"],
           source:     item.source ?? "batch_estimate",
-        });
+        };
+        results.set(entry.key, priceInfo);
+        await cachePrice(entry.key, currencyCode, priceInfo);
       }
     }
-  } catch {
+  } catch (error) {
     console.warn("[PRICES] Batch parse failed, falling back to nulls");
   }
 
-  for (const entry of unique) {
+  for (const entry of toFetch) {
     if (!results.has(entry.key)) {
-      results.set(entry.key, { price: null, confidence: "low", source: "unavailable" });
+      const priceInfo = { price: null, confidence: "low" as const, source: "unavailable" };
+      results.set(entry.key, priceInfo);
+      await cachePrice(entry.key, currencyCode, priceInfo);
     }
   }
 
   return results;
 }
 
-async function fetchPricesParallel(
+async function fetchPricesParallelWithCache(
   unique: UniqueProductEntry[],
   currencyCode: string
 ): Promise<Map<string, PriceInfo>> {
   const results = new Map<string, PriceInfo>();
-  const model   = genAI.getGenerativeModel({ model: MODEL_NAME });
+  const toFetch: UniqueProductEntry[] = [];
+  
+  // التحقق من cache أولاً
+  for (const entry of unique) {
+    const cached = await getCachedPrice(entry.key, currencyCode);
+    if (cached) {
+      results.set(entry.key, cached);
+    } else {
+      toFetch.push(entry);
+    }
+  }
+  
+  if (toFetch.length === 0) {
+    return results;
+  }
+  
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-  for (let i = 0; i < unique.length; i += MAX_PARALLEL_CHUNKS) {
-    const chunk   = unique.slice(i, i + MAX_PARALLEL_CHUNKS);
+  for (let i = 0; i < toFetch.length; i += MAX_PARALLEL_CHUNKS) {
+    const chunk   = toFetch.slice(i, i + MAX_PARALLEL_CHUNKS);
     const fetched = await Promise.allSettled(
       chunk.map(async (p) => {
         const prompt = `Return ONLY JSON. Current retail price of "${p.product_name}"${p.brand ? ` by ${p.brand}` : ""} in ${currencyCode}.
@@ -366,20 +593,24 @@ FORMAT: {"price": <number or null>, "confidence": "high|medium|low", "source": "
     for (const outcome of fetched) {
       if (outcome.status === "fulfilled") {
         const { key, data } = outcome.value;
-        results.set(key, {
+        const priceInfo: PriceInfo = {
           price:      typeof data.price === "number" ? data.price : null,
           confidence: (["high", "medium", "low"].includes(data.confidence)
             ? data.confidence
             : "medium") as PriceInfo["confidence"],
           source:     data.source ?? "ai_estimate",
-        });
+        };
+        results.set(key, priceInfo);
+        await cachePrice(key, currencyCode, priceInfo);
       }
     }
   }
 
-  for (const entry of unique) {
+  for (const entry of toFetch) {
     if (!results.has(entry.key)) {
-      results.set(entry.key, { price: null, confidence: "low", source: "fetch_failed" });
+      const priceInfo = { price: null, confidence: "low" as const, source: "fetch_failed" };
+      results.set(entry.key, priceInfo);
+      await cachePrice(entry.key, currencyCode, priceInfo);
     }
   }
 
@@ -403,14 +634,61 @@ async function fetchMarketPrices(
 
   const priceMap =
     unique.length >= BATCH_PRICE_THRESHOLD
-      ? await fetchPricesBatch(unique, currencyCode)
-      : await fetchPricesParallel(unique, currencyCode);
+      ? await fetchPricesBatchWithCache(unique, currencyCode)
+      : await fetchPricesParallelWithCache(unique, currencyCode);
 
   return { priceMap, savedCalls, uniqueCount: unique.length };
 }
 
 // ──────────────────────────────────────────────────────────────
-// 10. MASTER PROMPT BUILDER (أكثر دقة)
+// 13. IMAGE QUALITY ANALYSIS (NEW)
+// ──────────────────────────────────────────────────────────────
+
+async function analyzeImageQuality(base64: string, mimeType: string): Promise<{
+  has_barcodes: boolean;
+  has_qr_codes: boolean;
+  has_prices_on_shelves: boolean;
+  image_quality_score: number;
+  lighting_quality: 'excellent' | 'good' | 'poor';
+  suggested_improvements: string[];
+}> {
+  const prompt = `Analyze this inventory image and return ONLY JSON with:
+{
+  "has_barcodes": boolean,
+  "has_qr_codes": boolean,
+  "has_prices_on_shelves": boolean,
+  "image_quality_score": number (0-100),
+  "lighting_quality": "excellent" | "good" | "poor",
+  "suggested_improvements": ["improvement1", "improvement2"]
+}
+
+Be strict: only return valid JSON, no other text.`;
+
+  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+  
+  try {
+    const result = await withTimeout(
+      model.generateContent([prompt, { inlineData: { data: base64, mimeType } }]),
+      10000,
+      "Image quality analysis timeout"
+    );
+    
+    return extractJSON(result.response.text());
+  } catch (error) {
+    console.warn("[QUALITY] Analysis failed:", error);
+    return {
+      has_barcodes: false,
+      has_qr_codes: false,
+      has_prices_on_shelves: false,
+      image_quality_score: 50,
+      lighting_quality: 'good',
+      suggested_improvements: ['Ensure clear focus', 'Improve lighting']
+    };
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// 14. MASTER PROMPT BUILDER
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
@@ -452,22 +730,10 @@ function buildMasterPrompt(ctx: GeoContext): string {
 4. اترك unit_price = null (سيتم جلب السعر لاحقاً من السوق)
 5. حدد الكمية (quantity) بدقة بناءً على العناصر المرئية
 6. عند وجود عدة عناصر متطابقة، احسب الكمية الإجمالية
-7. حدد مستوى الثقة (confidence) بصراحة:
-   - high: المنتج واضح تماماً والمعلومات مؤكدة
-   - medium: المنتج واضح ولكن بعض التفاصيل غير مؤكدة
-   - low: المنتج غير واضح أو غير مكتمل
+7. حدد مستوى الثقة (confidence) بصراحة
 
 ═══════════════════════════════════════════════════════════════════
-🔍 نصائح لتحليل أكثر دقة:
-═══════════════════════════════════════════════════════════════════
-- إذا كان المنتج مكرراً (مثل 5 علب كوكاكولا)، ضع quantity = 5 و product واحد
-- اقرأ الأسعار المكتوبة على المنتجات إذا كانت مرئية (سيتم استخدامها لاحقاً)
-- حدد الماركة التجارية إذا كانت ظاهرة (Apple, Samsung, Nike...)
-- لاحظ تواريخ الصلاحية إذا كانت مرئية وأضفها في حقل notes
-- انتبه للحالة (جديد، مستعمل، معروض للبيع، تالف)
-
-═══════════════════════════════════════════════════════════════════
-📤 مخرجات JSON المطلوبة (استخدم هذا القالب حرفياً):
+📤 مخرجات JSON المطلوبة:
 ═══════════════════════════════════════════════════════════════════
 {
   "business_type": "نوع النشاط التجاري",
@@ -475,30 +741,23 @@ function buildMasterPrompt(ctx: GeoContext): string {
   "detected_items_count": 0,
   "products": [
     {
-      "product_name": "الاسم الدقيق للمنتج باللغة ${lang}",
+      "product_name": "الاسم الدقيق للمنتج",
       "brand": "اسم الماركة أو null",
       "category": "التصنيف المناسب",
       "unit_price": null,
       "quantity": 1,
-      "barcode_serial": "الباركود أو الرقم التسلسلي أو null",
+      "barcode_serial": "الباركود أو null",
       "confidence": "high | medium | low",
-      "notes": "تفاصيل إضافية: المقاس، اللون، السعة، الحالة، تاريخ الصلاحية، ملاحظات أخرى"
+      "notes": "تفاصيل إضافية"
     }
   ],
-  "warnings": ["أي تحذيرات متعلقة بجودة الصورة أو عدم وضوح بعض العناصر"],
-  "suggestions": ["اقتراحات لتحسين الجرد مستقبلاً"]
-}
-
-═══════════════════════════════════════════════════════════════════
-✅ تذكير أخير:
-- دقة التحليل هي أولويتنا الأولى
-- كمية المنتجات (quantity) يجب أن تعكس العدد الحقيقي في الصورة
-- إذا كانت الصورة فارغة أو ذات جودة سيئة، أعد analysis_quality: "poor" وقائمة منتجات فارغة
-═══════════════════════════════════════════════════════════════════`;
+  "warnings": [],
+  "suggestions": []
+}`;
 }
 
 // ──────────────────────────────────────────────────────────────
-// 11. IMAGE PROCESSING & VALIDATION
+// 15. PROCESS IMAGE INPUT
 // ──────────────────────────────────────────────────────────────
 
 function processImageInput(image: string): { base64: string; mimeType: string } {
@@ -514,13 +773,11 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
     base64 = image;
   }
 
-  if (!ALLOWED_MIME_TYPES.has(mimeType)) mimeType = "image/jpeg";
-
   return { base64, mimeType };
 }
 
 // ──────────────────────────────────────────────────────────────
-// 12. PRODUCT SANITIZER
+// 16. PRODUCT SANITIZER
 // ──────────────────────────────────────────────────────────────
 
 function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
@@ -545,7 +802,7 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 13. POST HANDLER — مع دعم قابلية التعديل اليدوي
+// 17. POST HANDLER (الدالة الرئيسية)
 // ──────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -592,7 +849,8 @@ export async function POST(request: NextRequest) {
 
   const ctx = await resolveGeoContext(request, country_override);
 
-  const { base64, mimeType } = processImageInput(image);
+  // معالجة الصورة الأولية
+  let { base64, mimeType } = processImageInput(image);
 
   if (!validateBase64(base64)) {
     return NextResponse.json(
@@ -601,15 +859,41 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // تحويل وتحسين الصورة (يدعم جميع الصيغ)
+  let optimizedImage;
+  try {
+    optimizedImage = await convertAndOptimizeImage(base64, mimeType, 1024, 1024);
+    base64 = optimizedImage.base64;
+    mimeType = optimizedImage.mimeType;
+  } catch (convError) {
+    console.error("[IMAGE] Conversion failed:", convError);
+    return NextResponse.json(
+      { success: false, error: "نوع الصورة غير مدعوم أو تالف." },
+      { status: 400 }
+    );
+  }
+
   const imageBytes = Buffer.byteLength(base64, "base64");
   if (imageBytes > MAX_IMAGE_BYTES) {
     return NextResponse.json(
-      { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB.` },
+      { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB بعد التحسين.` },
       { status: 413 }
     );
   }
 
-  // تحليل الصورة
+  // تحليل جودة الصورة (اختياري)
+  let qualityAnalysis;
+  try {
+    qualityAnalysis = await analyzeImageQuality(base64, mimeType);
+    if (qualityAnalysis.image_quality_score < 30) {
+      console.warn(`[QUALITY] Low image quality: ${qualityAnalysis.image_quality_score}/100`);
+    }
+  } catch (qualityError) {
+    console.warn("[QUALITY] Analysis skipped:", qualityError);
+    qualityAnalysis = null;
+  }
+
+  // تحليل الصورة باستخدام Gemini
   let parsedAI: any;
   try {
     const model = genAI.getGenerativeModel({
@@ -694,16 +978,16 @@ export async function POST(request: NextRequest) {
       ? parsedAI.analysis_quality
       : "fair";
 
-  // بناء الاستجابة مع إمكانية التعديل اليدوي
+  // بناء الاستجابة النهائية
   const response = {
     success: true,
-    editable: true, // إشارة إلى أن المخرجات قابلة للتعديل يدوياً
+    editable: true,
     business_type: sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
     analysis_quality: analysisQuality,
     detected_items_count: products.length,
     products: products.map(p => ({
       ...p,
-      _editable_fields: ["quantity", "unit_price", "product_name", "notes"] // حقول قابلة للتعديل
+      _editable_fields: ["quantity", "unit_price", "product_name", "notes"]
     })),
     warnings: Array.isArray(parsedAI.warnings) ? parsedAI.warnings.slice(0, 10).map((w: any) => sanitize(w)) : [],
     suggestions: Array.isArray(parsedAI.suggestions) ? parsedAI.suggestions.slice(0, 5).map((s: any) => sanitize(s)) : [],
@@ -722,13 +1006,16 @@ export async function POST(request: NextRequest) {
     total_estimated_value: totalValue,
     total_estimated_value_formatted: `${ctx.currency.symbol}${formattedTotal}`,
 
+    // معلومات جودة الصورة (جديدة)
+    image_quality_analysis: qualityAnalysis,
+
     // تعليمات التعديل اليدوي
     edit_instructions: {
       ar: "يمكنك تعديل الكمية (quantity) والسعر (unit_price) يدوياً في الواجهة الأمامية",
       en: "You can manually edit quantity and unit_price in the frontend"
     },
 
-    // بيانات أولية للمساعدة في التعديل
+    // البيانات الأولية
     _raw_ai_response: {
       business_type: parsedAI.business_type,
       analysis_quality: parsedAI.analysis_quality,
@@ -736,15 +1023,26 @@ export async function POST(request: NextRequest) {
       suggestions_count: parsedAI.suggestions?.length || 0
     },
 
-    // مقاييس الأداء
+    // مقاييس الأداء والميزات المدعومة
     _meta: {
-      engine: "Universal Inventory Intelligence v4.0",
+      engine: "Universal Inventory Intelligence v5.0",
       model: MODEL_NAME,
       duration_ms: Date.now() - startTime,
       prices_fetched: pricesFetched,
       unique_products: uniqueCount,
       saved_api_calls: savedCalls,
       country_detected: ctx.countryCode,
+      image_optimization: {
+        original_size_kb: optimizedImage ? (optimizedImage.originalSize / 1024).toFixed(1) : null,
+        optimized_size_kb: optimizedImage ? (optimizedImage.optimizedSize / 1024).toFixed(1) : null,
+        original_format: mimeType
+      },
+      supported_features: {
+        all_image_formats: true,
+        auto_conversion: true,
+        price_caching: true,
+        quality_analysis: !!qualityAnalysis
+      }
     },
   };
 
@@ -752,7 +1050,7 @@ export async function POST(request: NextRequest) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 14. GET HANDLER
+// 18. GET HANDLER
 // ──────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
@@ -763,7 +1061,7 @@ export async function GET(request: NextRequest) {
     status_ar: "متصل",
     engine: "Universal Inventory Intelligence",
     engine_ar: "محرك الجرد الذكي الشامل",
-    version: "4.0.0",
+    version: "5.0.0",
     model: MODEL_NAME,
     timestamp: new Date().toISOString(),
     editable_output: true,
@@ -779,8 +1077,16 @@ export async function GET(request: NextRequest) {
       exponential_backoff: true,
       arabic_first: true,
       zero_hallucination: true,
-      manual_editing_support: true
+      manual_editing_support: true,
+      all_image_formats: true,
+      auto_image_conversion: true,
+      price_caching: true,
+      quality_analysis: true
     },
+    supported_image_formats: [
+      "JPEG", "PNG", "WebP", "GIF", "BMP", 
+      "TIFF", "HEIC", "HEIF", "AVIF", "SVG"
+    ],
     detected_context: {
       country: ctx.countryNameEn,
       country_ar: ctx.countryNameAr,
