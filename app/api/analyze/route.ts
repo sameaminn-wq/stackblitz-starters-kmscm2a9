@@ -418,7 +418,7 @@ function extractJSON<T>(raw: string): T {
   
   try {
     return JSON.parse(text);
-  } catch (firstError) {
+  } catch (firstError: any) { // التغيير 1: أضفنا ": any" هنا
     // محاولة إصلاح الأخطاء الشائعة
     const fixed = text
       .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
@@ -429,7 +429,7 @@ function extractJSON<T>(raw: string): T {
     
     try {
       return JSON.parse(fixed);
-    } catch (secondError) {
+    } catch (secondError: any) { // التغيير 2: أضفنا ": any" هنا أيضاً
       console.error("[JSON] Failed to parse:", text.substring(0, 200));
       throw new Error(`Invalid JSON format: ${firstError.message}`);
     }
