@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from 'sharp'; // أضف: npm install sharp
-import type { ProductItem, Confidence } from "../../types";
+import type { ProductItem, Confidence } from "../../../types";
 
 // ──────────────────────────────────────────────────────────────
 // 1. CONFIGURATION
