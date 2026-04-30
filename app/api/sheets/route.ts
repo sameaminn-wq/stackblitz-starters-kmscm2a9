@@ -212,9 +212,13 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   totalRow.getCell(6).alignment = { horizontal: "right" };
 
   // ضبط عرض الأعمدة
+ // ضبط عرض الأعمدة بشكل آمن
+ if (worksheet.columns) {
   worksheet.columns.forEach(column => {
+    if (!column) return; // تأمين إضافي
+    
     let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, cell => {
+    column.eachCell!({ includeEmpty: true }, cell => {
       const columnLength = cell.value ? cell.value.toString().length : 10;
       if (columnLength > maxLength) {
         maxLength = columnLength;
@@ -222,6 +226,7 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
     });
     column.width = maxLength < 10 ? 10 : maxLength + 2;
   });
+}
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
