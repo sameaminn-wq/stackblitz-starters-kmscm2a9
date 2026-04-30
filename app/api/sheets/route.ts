@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
-import { ProductItem, ExportRequest, Confidence } from "./types";
+import { ProductItem, ExportRequest, Confidence } from "../../../types";
 
 // ============================================================
 // وظائف مساعدة لتوليد التقارير (Helper Functions for Report Generation)
