@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-// تأكد أيضاً من استيراد useEffect إذا كنت تستخدم isMounted
 
 // ============================================================
 // Types (متوافقة مع الـ API Route)
@@ -177,7 +176,6 @@ function ImageCapture({ onCapture, onCaptureMultiple, disabled }: {
     setSelectedCount(fileArray.length);
     
     if (fileArray.length === 1) {
-      // صورة واحدة → استخدم onCapture القديم للتوافق
       const reader = new FileReader();
       reader.onload = (e) => {
         if (e.target?.result) onCapture(e.target.result as string);
@@ -185,7 +183,6 @@ function ImageCapture({ onCapture, onCaptureMultiple, disabled }: {
       };
       reader.readAsDataURL(fileArray[0]);
     } else if (fileArray.length > 1 && onCaptureMultiple) {
-      // عدة صور → استخدم onCaptureMultiple
       Promise.all(
         fileArray.map((file) => {
           return new Promise<string>((resolve) => {
@@ -206,7 +203,6 @@ function ImageCapture({ onCapture, onCaptureMultiple, disabled }: {
     if (files && files.length > 0) {
       readFiles(files);
     }
-    // إعادة تعيين الـ input ليسمح بنفس الملفات مرة أخرى
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -255,7 +251,6 @@ function ImageCapture({ onCapture, onCaptureMultiple, disabled }: {
         onChange={handleCameraChange} 
       />
       
-      {/* عرض عدد الصور المختارة */}
       {selectedCount > 0 && (
         <div style={{ 
           marginTop: "1rem", 
@@ -1095,7 +1090,7 @@ function InvoiceModal({
 }
 
 // ============================================================
-// Main Component - هذه هي الصفحة الرئيسية (معدلة)
+// Main Component - الصفحة الرئيسية (معدلة بالكامل)
 // ============================================================
 export default function InventoryScannerPage() {
   const [isMounted, setIsMounted] = useState(false);
@@ -1103,7 +1098,7 @@ export default function InventoryScannerPage() {
   const [isAnalyzingMultiple, setIsAnalyzingMultiple] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [previewImg, setPreviewImg] = useState<string | null>(null);
+  const [previewImages, setPreviewImages] = useState<string[]>([]); // ✅ تغيير: مصفوفة صور بدلاً من صورة واحدة
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
   const [spreadsheetId, setSpreadsheetId] = useState("");
@@ -1111,6 +1106,7 @@ export default function InventoryScannerPage() {
   const [currency, setCurrency] = useState<Currency>(CURRENCIES[0]);
   const [showInvoice, setShowInvoice] = useState(false);
   const [processingImagesCount, setProcessingImagesCount] = useState(0);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
 
   useEffect(() => {
     setIsMounted(true);
@@ -1123,9 +1119,9 @@ export default function InventoryScannerPage() {
     }
   }, []);
 
-  // دالة لمعالجة صورة واحدة (للتوافق مع الإصدارات السابقة)
+  // دالة لمعالجة صورة واحدة
   const handleCapture = useCallback(async (imageData: string) => {
-    setPreviewImg(imageData);
+    setPreviewImages([imageData]);
     setLoading(true);
     setError(null);
     setResult(null);
@@ -1140,51 +1136,46 @@ export default function InventoryScannerPage() {
 
       const contentType = res.headers.get("content-type") ?? "";
       if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON response from server:", rawText.substring(0, 300));
-        throw new Error(
-          `الخادم أرجع استجابة غير متوقعة (${res.status} ${res.statusText}). تحقق من السيرفر.`
-        );
+        throw new Error(`الخادم أرجع استجابة غير متوقعة (${res.status})`);
       }
 
       let data: AnalysisResult;
       try {
         data = await res.json();
       } catch {
-        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+        throw new Error("فشل في قراءة رد الخادم");
       }
 
       if (!res.ok || !data.success) {
-        const serverError = (data as { error?: string; detail?: string }).error
-          ?? (data as { detail?: string }).detail
-          ?? `خطأ ${res.status}: فشل التحليل`;
-        throw new Error(serverError);
-      }
-
-      if (!Array.isArray(data.products)) {
-        throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
+        throw new Error(data.error || `خطأ ${res.status}`);
       }
 
       setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // جديدة: دالة لمعالجة عدة صور
+  // دالة لمعالجة عدة صور
   const handleCaptureMultiple = useCallback(async (imagesData: string[]) => {
     if (imagesData.length === 0) return;
     
-    // عرض أول صورة كمعاينة
-    setPreviewImg(imagesData[0]);
+    // ✅ حفظ كل الصور المعاينة
+    setPreviewImages(imagesData);
     setProcessingImagesCount(imagesData.length);
     setIsAnalyzingMultiple(true);
     setLoading(true);
     setError(null);
     setResult(null);
     setExportSuccess(false);
+    setAnalysisProgress(0);
+
+    // محاكاة التقدم
+    const progressInterval = setInterval(() => {
+      setAnalysisProgress(prev => Math.min(prev + 10, 90));
+    }, 1500);
 
     try {
       console.log(`📸 جاري تحليل ${imagesData.length} صور...`);
@@ -1193,15 +1184,16 @@ export default function InventoryScannerPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
-          images: imagesData,  // إرسال مصفوفة الصور
+          images: imagesData,
           fetch_prices: true,
         }),
       });
 
+      clearInterval(progressInterval);
+      setAnalysisProgress(100);
+
       const contentType = res.headers.get("content-type") ?? "";
       if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON response from server:", rawText.substring(0, 300));
         throw new Error(`الخادم أرجع استجابة غير متوقعة (${res.status})`);
       }
 
@@ -1209,31 +1201,36 @@ export default function InventoryScannerPage() {
       try {
         data = await res.json();
       } catch {
-        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+        throw new Error("فشل في قراءة رد الخادم");
       }
 
       if (!res.ok || !data.success) {
-        const serverError = (data as { error?: string; detail?: string }).error
-          ?? (data as { detail?: string }).detail
-          ?? `خطأ ${res.status}: فشل التحليل`;
-        throw new Error(serverError);
-      }
-
-      if (!Array.isArray(data.products)) {
-        throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
+        throw new Error(data.error || `خطأ ${res.status}`);
       }
 
       setResult(data);
-      console.log(`✅ تم تحليل ${imagesData.length} صور، تم اكتشاف ${data.products.length} منتج فريد`);
+      console.log(`✅ تم تحليل ${imagesData.length} صور، تم اكتشاف ${data.products.length} منتج`);
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع");
     } finally {
       setLoading(false);
       setIsAnalyzingMultiple(false);
-      setProcessingImagesCount(0);
+      setAnalysisProgress(0);
     }
   }, []);
+
+  // حذف صورة من المعاينة
+  const removePreviewImage = (index: number) => {
+    setPreviewImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // مسح كل الصور
+  const clearAllImages = () => {
+    setPreviewImages([]);
+    setResult(null);
+    setError(null);
+  };
 
   const handleFieldChange = useCallback((idx: number, field: keyof ProductItem, value: string) => {
     setResult((prev) => {
@@ -1274,27 +1271,15 @@ export default function InventoryScannerPage() {
         }),
       });
 
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON from /api/sheets:", rawText.substring(0, 300));
-        throw new Error(`خطأ من الخادم (${res.status}). تحقق من إعداد Google Sheets API.`);
-      }
-
-      let data: { success: boolean; error?: string; detail?: string };
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد خادم الجداول");
-      }
+      const data = await res.json();
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error ?? data.detail ?? `فشل التصدير (${res.status})`);
+        throw new Error(data.error || `فشل التصدير (${res.status})`);
       }
 
       setExportSuccess(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بخدمة الجداول");
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع");
     } finally {
       setExporting(false);
     }
@@ -1341,10 +1326,11 @@ export default function InventoryScannerPage() {
       if (!confirmed) return;
     }
     setResult(null);
-    setPreviewImg(null);
+    setPreviewImages([]);
     setError(null);
     setExportSuccess(false);
     setProcessingImagesCount(0);
+    setAnalysisProgress(0);
   };
 
   const highConfidence = result?.products.filter((p) => p.confidence === "high").length ?? 0;
@@ -1385,10 +1371,113 @@ export default function InventoryScannerPage() {
         .btn-export:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 25px rgba(16,185,129,0.4); }
         .btn-reset { width: 100%; padding: 0.75rem; background: transparent; color: #64748b; border: 1px solid rgba(100,116,139,0.2); border-radius: 12px; justify-content: center; font-size: 0.85rem; margin-top: 0.5rem; }
         .btn-reset:hover { color: #94a3b8; border-color: rgba(100,116,139,0.4); }
-        .image-preview { border-radius: 16px; overflow: hidden; border: 1px solid rgba(99,157,255,0.15); margin-bottom: 1.25rem; position: relative; }
-        .image-preview img { width: 100%; max-height: 220px; object-fit: cover; display: block; }
-        .image-preview-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 0.75rem 1rem; background: linear-gradient(transparent, rgba(0,0,0,0.7)); font-size: 0.75rem; color: #94a3b8; }
-        .loading-wrapper { text-align: center; padding: 2.5rem 1rem; }
+        
+        /* ✅ أنماط عرض شبكة الصور */
+        .images-preview-grid {
+          background: rgba(15,22,44,0.5);
+          border-radius: 16px;
+          padding: 1rem;
+          margin-bottom: 1.25rem;
+          border: 1px solid rgba(99,157,255,0.15);
+        }
+        .images-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.75rem;
+          font-size: 0.85rem;
+          color: #60a5fa;
+        }
+        .clear-images-btn {
+          background: rgba(239,68,68,0.15);
+          border: 1px solid rgba(239,68,68,0.3);
+          color: #f87171;
+          padding: 0.25rem 0.75rem;
+          border-radius: 8px;
+          font-size: 0.7rem;
+          cursor: pointer;
+        }
+        .preview-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+          gap: 0.75rem;
+        }
+        .preview-item {
+          position: relative;
+          aspect-ratio: 1;
+          border-radius: 10px;
+          overflow: hidden;
+          border: 1px solid rgba(99,157,255,0.2);
+          transition: transform 0.2s;
+        }
+        .preview-item:hover {
+          transform: scale(1.02);
+          border-color: rgba(99,157,255,0.5);
+        }
+        .preview-item img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .remove-image-btn {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          background: rgba(239,68,68,0.8);
+          border: none;
+          color: white;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-size: 10px;
+          transition: background 0.2s;
+        }
+        .remove-image-btn:hover {
+          background: rgba(239,68,68,1);
+        }
+        .image-number {
+          position: absolute;
+          bottom: 4px;
+          left: 4px;
+          background: rgba(0,0,0,0.6);
+          color: white;
+          font-size: 10px;
+          padding: 2px 5px;
+          border-radius: 4px;
+        }
+        
+        /* ✅ أنماط شريط التقدم */
+        .progress-container {
+          background: rgba(15,22,44,0.8);
+          border-radius: 12px;
+          padding: 1rem;
+          margin-bottom: 1rem;
+          border: 1px solid rgba(59,130,246,0.3);
+        }
+        .progress-bar {
+          height: 8px;
+          background: linear-gradient(90deg, #3b82f6, #6366f1);
+          border-radius: 4px;
+          transition: width 0.3s ease;
+          margin-bottom: 0.5rem;
+        }
+        .progress-text {
+          font-size: 0.85rem;
+          color: #60a5fa;
+          text-align: center;
+          margin-bottom: 0.25rem;
+        }
+        .progress-status {
+          font-size: 0.7rem;
+          color: #475569;
+          text-align: center;
+        }
+        
+        .loading-wrapper { text-align: center; padding: 2.5rem 1rem; background: rgba(15,22,44,0.6); border-radius: 20px; margin: 1rem 0; }
         .loading-spinner { width: 52px; height: 52px; border: 3px solid rgba(59,130,246,0.15); border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 1.25rem; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .loading-dots { display: flex; justify-content: center; gap: 5px; margin-top: 0.75rem; }
@@ -1396,6 +1485,7 @@ export default function InventoryScannerPage() {
         .dot:nth-child(2) { animation-delay: 0.2s; }
         .dot:nth-child(3) { animation-delay: 0.4s; }
         @keyframes bounce { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+        
         .error-box { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); border-radius: 14px; padding: 1rem 1.25rem; display: flex; align-items: flex-start; gap: 0.75rem; margin-bottom: 1rem; }
         .error-icon { font-size: 1.2rem; flex-shrink: 0; }
         .error-text { color: #fca5a5; font-size: 0.88rem; line-height: 1.5; }
@@ -1468,7 +1558,7 @@ export default function InventoryScannerPage() {
         .has-id-dot { width: 6px; height: 6px; background: #10b981; border-radius: 50%; position: absolute; top: 4px; left: 4px; }
         .settings-btn-wrap { position: relative; display: inline-flex; }
         .hidden { display: none; }
-        @media (max-width: 420px) { .stats-bar { grid-template-columns: 1fr 1fr; } .edit-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 420px) { .stats-bar { grid-template-columns: 1fr 1fr; } .edit-grid { grid-template-columns: 1fr; } .preview-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); } }
       `}</style>
 
       {showSettings && (
@@ -1559,16 +1649,46 @@ export default function InventoryScannerPage() {
         </header>
 
         <main className="main">
-          {previewImg && !isLoading && (
-            <div className="image-preview">
-              <img src={previewImg} alt="صورة الرف" />
-              <div className="image-preview-overlay">
-                {result ? `تم تحليل ${result?.total_products_detected ?? 0} منتج` : "تم التقاط الصورة"}
+          {/* ✅ عرض شبكة الصور المرفوعة */}
+          {previewImages.length > 0 && !result && !isLoading && (
+            <div className="images-preview-grid">
+              <div className="images-header">
+                <span>📸 {previewImages.length} صور مرفوعة للتحليل</span>
+                <button onClick={clearAllImages} className="clear-images-btn">
+                  مسح الكل
+                </button>
+              </div>
+              <div className="preview-grid">
+                {previewImages.map((img, idx) => (
+                  <div key={idx} className="preview-item">
+                    <img src={img} alt={`صورة ${idx + 1}`} />
+                    <button 
+                      className="remove-image-btn"
+                      onClick={() => removePreviewImage(idx)}
+                    >
+                      ✕
+                    </button>
+                    <span className="image-number">#{idx + 1}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {!result && !isLoading && (
+          {/* ✅ شريط التقدم أثناء التحليل المتعدد */}
+          {isAnalyzingMultiple && analysisProgress > 0 && analysisProgress < 100 && (
+            <div className="progress-container">
+              <div className="progress-bar" style={{ width: `${analysisProgress}%` }} />
+              <div className="progress-text">
+                🔄 جاري تحليل {processingImagesCount} صور... {analysisProgress}%
+              </div>
+              <div className="progress-status">
+                ⏳ قد يستغرق التحليل {Math.ceil(processingImagesCount * 5)} ثوانٍ تقريباً
+              </div>
+            </div>
+          )}
+
+          {!result && !isLoading && previewImages.length === 0 && (
             <ImageCapture 
               onCapture={handleCapture} 
               onCaptureMultiple={handleCaptureMultiple}
