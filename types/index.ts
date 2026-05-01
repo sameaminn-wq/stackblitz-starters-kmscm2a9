@@ -9,40 +9,50 @@ export type ProductCondition = "good" | "damaged" | "expired" | "unknown";
 export type LightingQuality = "excellent" | "good" | "poor";
 export type AnalysisQuality = "excellent" | "good" | "fair" | "poor";
 
+// ============================================================
+// المنتجات
+// ============================================================
+
 export interface ProductItem {
   product_name: string;
   brand: string | null;
   category: string;
-  unit_price: number | null; // السعر الحالي (يمكن تعديله يدوياً)
-  quantity: number; // الكمية (يمكن تعديلها يدوياً)
-  barcode_serial: string | null;
+  unit_price: string | number | null; // يمكن أن يكون string من API القديم
+  quantity: number | string; // يمكن أن يكون string من API القديم
+  barcode: string | null; // API القديم يستخدم barcode
+  barcode_serial?: string | null; // API الجديد يستخدم barcode_serial
   confidence: Confidence;
   notes: string;
-  // ✅ حقول جديدة من v5.2
-  condition?: ProductCondition;      // حالة المنتج (جيد/تالف/منتهي)
-  expiry_date?: string | null;       // تاريخ الصلاحية
-  location_hint?: string | null;     // موقع المنتج في الرف
+  // حقول جديدة من v5.2
+  condition?: ProductCondition;
+  expiry_date?: string | null;
+  location_hint?: string | null;
 }
 
-// ✅ جديد: تقدير السعر (نطاق مقترح)
+// ✅ تقدير السعر (نطاق مقترح)
 export interface PriceEstimate {
-  min_price: number | null;      // أقل سعر تقريبي
-  max_price: number | null;      // أعلى سعر تقريبي
-  suggested_price: number | null; // السعر المقترح (متوسط)
+  min_price: number | null;
+  max_price: number | null;
+  suggested_price: number | null;
   confidence: "high" | "medium" | "low";
-  source: string;                 // مصدر التقدير (market_data, similar_products, ai_estimate)
+  source: string;
 }
 
-// ✅ جديد: منتج قابل للتعديل (يستخدم في الواجهة الأمامية)
+// ✅ منتج قابل للتعديل (يستخدم في الواجهة الأمامية)
 export interface EditableProductItem extends ProductItem {
-  original_price?: number | null;      // السعر الأصلي من AI (للرجوع)
-  price_estimate?: PriceEstimate;      // تقدير السعر التقريبي
-  is_edited?: boolean;                  // هل تم تعديله يدوياً؟
-  last_modified?: string;               // تاريخ آخر تعديل
-  editable_fields?: string[];           // الحقول القابلة للتعديل
+  original_price?: number | null;
+  price_estimate?: PriceEstimate;
+  is_edited?: boolean;
+  last_modified?: string;
+  editable_fields?: string[];
+  _editable_fields?: string[]; // للتوافق مع API
 }
 
-// ✅ جديد: تحليل جودة الصورة
+// ============================================================
+// تحليل الصورة
+// ============================================================
+
+// ✅ تحليل جودة الصورة
 export interface ImageQualityAnalysis {
   has_barcodes: boolean;
   has_qr_codes: boolean;
@@ -55,7 +65,11 @@ export interface ImageQualityAnalysis {
   shelf_coverage_pct: number;
 }
 
-// ✅ جديد: معلومات العملة
+// ============================================================
+// العملة والموقع
+// ============================================================
+
+// ✅ معلومات العملة
 export interface CurrencyInfo {
   code: string;
   symbol: string;
@@ -64,7 +78,7 @@ export interface CurrencyInfo {
   exchangeRateToUSD: number;
 }
 
-// ✅ جديد: معلومات الموقع
+// ✅ معلومات الموقع
 export interface GeoContext {
   countryCode: string;
   countryNameAr: string;
@@ -73,25 +87,29 @@ export interface GeoContext {
   lang: "ar" | "en";
 }
 
-// ✅ جديد: معلومات السعر
+// ✅ معلومات السعر
 export interface PriceInfo {
   price: number | null;
   confidence: Confidence;
   source: string;
 }
 
-// ✅ الاستجابة الأساسية للتحليل
+// ============================================================
+// استجابات API
+// ============================================================
+
+// ✅ الاستجابة الأساسية للتحليل (API القديم)
 export interface InventoryAnalysisResult {
   success: boolean;
-  business_type: string;
-  analysis_quality: AnalysisQuality;
-  detected_items_count: number;
   products: ProductItem[];
+  total_products_detected: number;
+  analysis_quality: AnalysisQuality;
   warnings: string[];
-  suggestions: string[];
+  // حقول إضافية
+  business_type?: string;
+  suggestions?: string[];
   detected_location?: string;
   timestamp?: string;
-  // ✅ حقول جديدة
   editable?: boolean;
   currency_info?: CurrencyInfo;
   total_estimated_value?: number;
@@ -103,12 +121,12 @@ export interface InventoryAnalysisResult {
   };
 }
 
-// ✅ نتيجة التحليل الموسعة (مع دعم التعديل)
+// ✅ نتيجة التحليل الموسعة (API الجديد v5.2)
 export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult {
-  editable: boolean;                     // هل النتيجة قابلة للتعديل؟
-  allow_price_editing: boolean;         // السماح بتعديل الأسعار
-  allow_quantity_editing: boolean;      // السماح بتعديل الكميات
-  products: EditableProductItem[];      // منتجات قابلة للتعديل
+  editable: boolean;
+  allow_price_editing: boolean;
+  allow_quantity_editing: boolean;
+  products: EditableProductItem[];
   edit_guide?: {
     ar: {
       title: string;
@@ -129,7 +147,6 @@ export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult
     unique_products: number;
     saved_api_calls: number;
     country_detected: string;
-    // ✅ حقول جديدة لتحليل الصور المتعددة
     images_processed?: number;
     images_failed?: number;
     multi_image?: boolean;
@@ -150,14 +167,14 @@ export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult
 
 // ✅ طلب التحليل (يدعم صورة واحدة أو عدة صور)
 export interface AnalyzeRequest {
-  image?: string;           // صورة واحدة (Base64 أو Data URL)
-  images?: string[];        // عدة صور (Base64 أو Data URL)
-  fetch_prices?: boolean;   // هل يجب جلب الأسعار؟
-  country_override?: string; // تجاوز البلد المحدد (مثل "SA", "EG")
-  session_id?: string;      // معرف الجلسة للتعديلات
+  image?: string;
+  images?: string[];
+  fetch_prices?: boolean;
+  country_override?: string;
+  session_id?: string;
 }
 
-// ✅ استجابة التحليل الكاملة (من API v5.2)
+// ✅ استجابة التحليل الكاملة (API v5.2)
 export interface AnalyzeResponse {
   success: boolean;
   editable: boolean;
@@ -209,6 +226,10 @@ export interface AnalyzeResponse {
   };
 }
 
+// ============================================================
+// Google Sheets والتصدير
+// ============================================================
+
 // ✅ طلب التصدير إلى Google Sheets
 export interface ExportRequest {
   products: ProductItem[];
@@ -219,9 +240,21 @@ export interface ExportRequest {
   sheetName?: string;
 }
 
-// ✅ طلب تحديث المنتج (لحفظ التعديلات)
+// ✅ استجابة التصدير
+export interface ExportResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+  sheetUrl?: string;
+}
+
+// ============================================================
+// التعديلات اليدوية
+// ============================================================
+
+// ✅ طلب تحديث المنتج
 export interface UpdateProductRequest {
-  product_id?: number;              // معرف المنتج (إذا كان هناك)
+  product_id?: number;
   product_name?: string;
   quantity?: number;
   unit_price?: number | null;
@@ -229,10 +262,10 @@ export interface UpdateProductRequest {
   notes?: string;
 }
 
-// ✅ طلب حفظ التعديلات (للـ API)
+// ✅ طلب حفظ التعديلات
 export interface SaveEditsRequest {
   products: UpdateProductRequest[];
-  session_id?: string;              // معرف الجلسة
+  session_id?: string;
   timestamp?: string;
 }
 
@@ -245,7 +278,11 @@ export interface SaveEditsResponse {
   new_total_formatted: string;
 }
 
-// ✅ معلومات حالة الخادم (GET /api/analyze)
+// ============================================================
+// حالة الخادم (GET /api/analyze)
+// ============================================================
+
+// ✅ معلومات حالة الخادم
 export interface ServerStatusResponse {
   status: "online";
   status_ar: string;
@@ -286,4 +323,68 @@ export interface ServerStatusResponse {
     lang: string;
   };
   supported_industries: string[];
+}
+
+// ============================================================
+// دوال مساعدة للتوافق بين الإصدارات
+// ============================================================
+
+// ✅ تحويل منتج من صيغة API القديم إلى الجديد
+export function normalizeProduct(product: any): EditableProductItem {
+  return {
+    product_name: product.product_name || "منتج غير معروف",
+    brand: product.brand || null,
+    category: product.category || "عام",
+    unit_price: typeof product.unit_price === "number" ? product.unit_price : 
+                (product.unit_price ? parseFloat(product.unit_price) : null),
+    quantity: typeof product.quantity === "number" ? product.quantity :
+              (product.quantity ? parseInt(String(product.quantity)) : 1),
+    barcode: product.barcode || product.barcode_serial || null,
+    barcode_serial: product.barcode_serial || product.barcode || null,
+    confidence: product.confidence || "medium",
+    notes: product.notes || "",
+    condition: product.condition || "unknown",
+    expiry_date: product.expiry_date || null,
+    location_hint: product.location_hint || null,
+    editable_fields: ["quantity", "unit_price", "product_name", "notes", "condition"],
+  };
+}
+
+// ✅ تحويل استجابة API القديم إلى الصيغة الجديدة
+export function normalizeAnalysisResult(result: any): EditableInventoryAnalysisResult {
+  const products = Array.isArray(result.products) 
+    ? result.products.map(normalizeProduct)
+    : [];
+
+  return {
+    success: result.success ?? true,
+    products,
+    total_products_detected: products.length,
+    analysis_quality: result.analysis_quality || "good",
+    warnings: result.warnings || [],
+    business_type: result.business_type || "مخزون عام",
+    suggestions: result.suggestions || [],
+    detected_location: result.detected_location || "",
+    timestamp: result.timestamp || new Date().toISOString(),
+    editable: result.editable ?? true,
+    allow_price_editing: true,
+    allow_quantity_editing: true,
+    currency_info: result.currency_info,
+    total_estimated_value: result.total_estimated_value || 0,
+    total_estimated_value_formatted: result.total_estimated_value_formatted || "0",
+    image_quality_analysis: result.image_quality_analysis || null,
+    edit_instructions: result.edit_instructions || {
+      ar: "يمكنك تعديل الكمية والسعر والحالة يدوياً",
+      en: "You can manually edit quantity, price and condition"
+    },
+    _meta: result._meta || {
+      engine: "Universal Inventory Intelligence",
+      model: "gemini-2.5-flash",
+      duration_ms: 0,
+      prices_fetched: false,
+      unique_products: 0,
+      saved_api_calls: 0,
+      country_detected: "EG"
+    }
+  };
 }
