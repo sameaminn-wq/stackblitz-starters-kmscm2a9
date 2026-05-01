@@ -1649,11 +1649,11 @@ export default function InventoryScannerPage() {
         </header>
 
         <main className="main">
-          {/* ✅ عرض شبكة الصور المرفوعة */}
-          {previewImages.length > 0 && !result && !isLoading && (
+          {/* ✅ عرض شبكة الصور المرفوعة - تظهر دائماً عند وجود صور */}
+          {previewImages.length > 0 && !isLoading && (
             <div className="images-preview-grid">
               <div className="images-header">
-                <span>📸 {previewImages.length} صور مرفوعة للتحليل</span>
+                <span>📸 {previewImages.length} صور مرفوعة</span>
                 <button onClick={clearAllImages} className="clear-images-btn">
                   مسح الكل
                 </button>
