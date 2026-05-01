@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
-import { ProductItem, ExportRequest, Confidence } from "./types";
+import { ProductItem, ExportRequest, Confidence } from "../../../types";
 
 // ============================================================
 // وظائف مساعدة لتوليد التقارير (Helper Functions for Report Generation)
@@ -39,8 +39,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-  const page = pdfDoc.addPage();
-
+  let page = pdfDoc.addPage(); // استخدم let وليس const
   const { width, height } = page.getSize();
   let y = height - 50;
   const margin = 50;
@@ -114,9 +113,11 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
     y -= 20;
 
     if (y < margin) {
-      page.addPage();
+      // التعديل هنا: نطلب من المستند إضافة صفحة جديدة ونخزنها في المتغير page
+      page = pdfDoc.addPage([width, height]); 
       y = height - margin;
-      // إعادة رسم رأس الجدول للصفحة الجديدة
+      
+      // إعادة رسم رأس الجدول للصفحة الجديدة لكي يعرف المستخدم محتوى الأعمدة
       x = margin;
       for (let j = 0; j < tableHeaders.length; j++) {
         page.drawText(tableHeaders[j], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
@@ -168,15 +169,17 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   worksheet.addRow([`التاريخ: ${new Date().toLocaleDateString()}`]);
   worksheet.addRow([]); // صف فارغ
 
-  // رأس الجدول
-  const headers = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  worksheet.addRow(headers);
-  worksheet.getRow(worksheet.lastRow.number).font = { name: "Arial", size: 12, bold: true };
-  worksheet.getRow(worksheet.lastRow.number).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD3D3D3" } }; // رمادي فاتح
-    cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
-  });
-
+ // رأس الجدول
+ const headers = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
+  
+ // نقوم بتخزين الصف في متغير اسمه headerRow لنقوم بتعديله مباشرة بأمان
+ const headerRow = worksheet.addRow(headers);
+ 
+ headerRow.font = { name: "Arial", size: 12, bold: true };
+ headerRow.eachCell((cell) => {
+   cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD3D3D3" } }; // رمادي فاتح
+   cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+ });
   // بيانات المنتجات
   let totalAmount = 0;
   products.forEach((product, index) => {
@@ -209,9 +212,13 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   totalRow.getCell(6).alignment = { horizontal: "right" };
 
   // ضبط عرض الأعمدة
+ // ضبط عرض الأعمدة بشكل آمن
+ if (worksheet.columns) {
   worksheet.columns.forEach(column => {
+    if (!column) return; // تأمين إضافي
+    
     let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, cell => {
+    column.eachCell!({ includeEmpty: true }, cell => {
       const columnLength = cell.value ? cell.value.toString().length : 10;
       if (columnLength > maxLength) {
         maxLength = columnLength;
@@ -219,6 +226,7 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
     });
     column.width = maxLength < 10 ? 10 : maxLength + 2;
   });
+}
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);

@@ -1,26 +1,27 @@
 // app/api/analyze/route.ts
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  Universal Inventory Intelligence Engine — v5.0              ║
-// ║  Gemini 2.5 Flash · All Image Formats · Arabic-first         ║
-// ║  Supports: JPEG, PNG, WebP, GIF, BMP, TIFF, HEIC, AVIF       ║
+// ║  Universal Inventory Intelligence Engine — v5.2              ║
+// ║  Gemini 2.5 Flash · Multi-image · Condition Detection        ║
+// ║  تحليل الجودة مدمج · Cache محسّن · Arabic-first             ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import sharp from 'sharp'; // أضف: npm install sharp
-import type { ProductItem, Confidence } from "../../../types"; 
-// تذكر: 3 مرات ../ لكي تخرج من (analyze ثم api ثم app) وتصل للجذر
+// @ts-ignore
+import sharp from 'sharp';
+import type { ProductItem, Confidence } from "../../../types";
 
 // ──────────────────────────────────────────────────────────────
-// 1. CONFIGURATION
+// 1. CONFIGURATION (موسعة)
 // ──────────────────────────────────────────────────────────────
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 const MODEL_NAME = "gemini-2.5-flash";
 
-const MAX_IMAGE_SIZE_MB   = 10; // زيادة إلى 10MB لدعم الصور الأكبر
+const MAX_IMAGE_SIZE_MB   = 10;
 const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-const MAX_BODY_BYTES      = 15 * 1024 * 1024;
+const MAX_BODY_BYTES      = 25 * 1024 * 1024; // زيادة لدعم صور متعددة
+const MAX_IMAGES_PER_REQ  = 5;               // جديد: الحد الأقصى للصور في طلب واحد
 
 // دعم جميع أنواع الصور
 const ALLOWED_MIME_TYPES = new Set([
@@ -41,7 +42,7 @@ const MAX_PARALLEL_CHUNKS   = 3;
 const CACHE_TTL           = 24 * 60 * 60 * 1000; // 24 ساعة
 
 // ──────────────────────────────────────────────────────────────
-// 2. TYPES
+// 2. TYPES (موسعة)
 // ──────────────────────────────────────────────────────────────
 
 interface CurrencyInfo {
@@ -81,8 +82,28 @@ interface PriceCacheEntry {
   expiresAt: number;
 }
 
+// جديد: نوع لتحليل جودة الصورة
+interface ImageQualityAnalysis {
+  has_barcodes: boolean;
+  has_qr_codes: boolean;
+  has_prices_on_shelves: boolean;
+  image_quality_score: number;
+  lighting_quality: 'excellent' | 'good' | 'poor';
+  suggested_improvements: string[];
+  has_damaged_items: boolean;
+  has_expiry_dates: boolean;
+  shelf_coverage_pct: number;
+}
+
+// جديد: نوع للمنتج مع حالة
+interface EnhancedProductItem extends ProductItem {
+  condition: 'good' | 'damaged' | 'expired' | 'unknown';
+  expiry_date: string | null;
+  location_hint: string | null;
+}
+
 // ──────────────────────────────────────────────────────────────
-// 3. GEO + CURRENCY DATABASE (30+ عملة)
+// 3. GEO + CURRENCY DATABASE
 // ──────────────────────────────────────────────────────────────
 
 const CURRENCY_DB: Record<string, CurrencyInfo> = {
@@ -145,7 +166,7 @@ const COUNTRY_NAMES: Record<string, { ar: string; en: string; lang: "ar" | "en" 
 const DEFAULT_COUNTRY = "EG";
 
 // ──────────────────────────────────────────────────────────────
-// 4. PRICE CACHE (NEW)
+// 4. PRICE CACHE
 // ──────────────────────────────────────────────────────────────
 
 const priceCache = new Map<string, PriceCacheEntry>();
@@ -238,7 +259,7 @@ function sanitize(text: unknown, maxLen = 500): string {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 7. TIMEOUT UTILITY (NEW)
+// 7. TIMEOUT UTILITY
 // ──────────────────────────────────────────────────────────────
 
 async function withTimeout<T>(
@@ -246,7 +267,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: NodeJS.Timeout | undefined;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -255,7 +276,9 @@ async function withTimeout<T>(
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -289,7 +312,7 @@ async function withRetry<T>(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 9. IMAGE CONVERSION & OPTIMIZATION (NEW - يدعم جميع الصيغ)
+// 9. IMAGE CONVERSION & OPTIMIZATION
 // ──────────────────────────────────────────────────────────────
 
 async function convertAndOptimizeImage(
@@ -302,7 +325,6 @@ async function convertAndOptimizeImage(
   let buffer = Buffer.from(base64, 'base64');
   const originalSize = buffer.length;
   
-  // التحقق مما إذا كانت الصيغة تحتاج تحويل
   const needsConversion = FORMATS_NEEDING_CONVERSION.has(mimeType);
   let outputFormat: 'jpeg' | 'png' = 'jpeg';
   
@@ -317,7 +339,6 @@ async function convertAndOptimizeImage(
   try {
     let sharpInstance = sharp(buffer);
     
-    // تغيير الحجم إذا كان كبيراً
     const metadata = await sharpInstance.metadata();
     if (metadata.width && metadata.height) {
       if (metadata.width > maxWidth || metadata.height > maxHeight) {
@@ -328,7 +349,6 @@ async function convertAndOptimizeImage(
       }
     }
     
-    // تحويل وتحسين الجودة
     let optimizedBuffer: Buffer;
     let finalMimeType: string;
     
@@ -361,7 +381,7 @@ async function convertAndOptimizeImage(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 10. IMPROVED JSON EXTRACTION
+// 10. JSON EXTRACTION
 // ──────────────────────────────────────────────────────────────
 
 function extractJSON<T>(raw: string): T {
@@ -369,7 +389,6 @@ function extractJSON<T>(raw: string): T {
     throw new Error("Empty or invalid AI response");
   }
   
-  // تنظيف الاستجابة
   let text = raw
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
@@ -378,7 +397,6 @@ function extractJSON<T>(raw: string): T {
     .replace(/,\s*]/g, ']')
     .trim();
   
-  // البحث عن أول { أو [
   const objStart = text.indexOf("{");
   const arrStart = text.indexOf("[");
   
@@ -417,8 +435,7 @@ function extractJSON<T>(raw: string): T {
   
   try {
     return JSON.parse(text);
-  } catch (firstError) {
-    // محاولة إصلاح الأخطاء الشائعة
+  } catch (firstError: any) {
     const fixed = text
       .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
       .replace(/:\s*'([^']*)'/g, ':"$1"')
@@ -428,7 +445,7 @@ function extractJSON<T>(raw: string): T {
     
     try {
       return JSON.parse(fixed);
-    } catch (secondError) {
+    } catch (secondError: any) {
       console.error("[JSON] Failed to parse:", text.substring(0, 200));
       throw new Error(`Invalid JSON format: ${firstError.message}`);
     }
@@ -481,7 +498,6 @@ async function fetchPricesBatchWithCache(
   const results = new Map<string, PriceInfo>();
   const toFetch: UniqueProductEntry[] = [];
   
-  // التحقق من cache أولاً
   for (const entry of unique) {
     const cached = await getCachedPrice(entry.key, currencyCode);
     if (cached) {
@@ -560,7 +576,6 @@ async function fetchPricesParallelWithCache(
   const results = new Map<string, PriceInfo>();
   const toFetch: UniqueProductEntry[] = [];
   
-  // التحقق من cache أولاً
   for (const entry of unique) {
     const cached = await getCachedPrice(entry.key, currencyCode);
     if (cached) {
@@ -642,54 +657,44 @@ async function fetchMarketPrices(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 13. IMAGE QUALITY ANALYSIS (NEW)
+// 13. MERGE PRODUCTS FROM MULTIPLE IMAGES (جديد)
 // ──────────────────────────────────────────────────────────────
 
-async function analyzeImageQuality(base64: string, mimeType: string): Promise<{
-  has_barcodes: boolean;
-  has_qr_codes: boolean;
-  has_prices_on_shelves: boolean;
-  image_quality_score: number;
-  lighting_quality: 'excellent' | 'good' | 'poor';
-  suggested_improvements: string[];
-}> {
-  const prompt = `Analyze this inventory image and return ONLY JSON with:
-{
-  "has_barcodes": boolean,
-  "has_qr_codes": boolean,
-  "has_prices_on_shelves": boolean,
-  "image_quality_score": number (0-100),
-  "lighting_quality": "excellent" | "good" | "poor",
-  "suggested_improvements": ["improvement1", "improvement2"]
-}
-
-Be strict: only return valid JSON, no other text.`;
-
-  const model = genAI.getGenerativeModel({ model: MODEL_NAME });
+function mergeProductsFromMultipleImages(productsArray: EnhancedProductItem[][]): EnhancedProductItem[] {
+  const seen = new Map<string, EnhancedProductItem>();
   
-  try {
-    const result = await withTimeout(
-      model.generateContent([prompt, { inlineData: { data: base64, mimeType } }]),
-      10000,
-      "Image quality analysis timeout"
-    );
-    
-    return extractJSON(result.response.text());
-  } catch (error) {
-    console.warn("[QUALITY] Analysis failed:", error);
-    return {
-      has_barcodes: false,
-      has_qr_codes: false,
-      has_prices_on_shelves: false,
-      image_quality_score: 50,
-      lighting_quality: 'good',
-      suggested_improvements: ['Ensure clear focus', 'Improve lighting']
-    };
+  for (const products of productsArray) {
+    for (const p of products) {
+      const key = `${p.product_name.trim().toLowerCase()}|${(p.brand ?? "").trim().toLowerCase()}`;
+      
+      if (seen.has(key)) {
+        const existing = seen.get(key)!;
+        // دمج الكميات
+        const existingQty = typeof existing.quantity === "number" ? existing.quantity : parseInt(String(existing.quantity)) || 0;
+        const newQty = typeof p.quantity === "number" ? p.quantity : parseInt(String(p.quantity)) || 0;
+        existing.quantity = existingQty + newQty;
+        
+        // دمج الثقة (خذ الأعلى)
+        const confRank = { high: 3, medium: 2, low: 1 };
+        if (confRank[p.confidence] > confRank[existing.confidence]) {
+          existing.confidence = p.confidence;
+        }
+        
+        // إذا كان أحدهما تالفاً، سجل ذلك
+        if (p.condition === 'damaged' || p.condition === 'expired') {
+          existing.condition = p.condition;
+        }
+      } else {
+        seen.set(key, { ...p });
+      }
+    }
   }
+  
+  return Array.from(seen.values());
 }
 
 // ──────────────────────────────────────────────────────────────
-// 14. MASTER PROMPT BUILDER
+// 14. MASTER PROMPT BUILDER (موسع مع condition detection)
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
@@ -707,10 +712,10 @@ function buildMasterPrompt(ctx: GeoContext): string {
 ═══════════════════════════════════════════════════════════════════
 
 🎯 المهمة الأساسية:
-قم بتحليل الصورة المرفقة بدقة متناهية وأجرِ جرداً كاملاً لكل المنتجات المرئية.
+قم بتحليل الصورة المرفقة بدقة متناهية وأجرِ جرداً كاملاً لكل المنتجات المرئية، مع كشف المنتجات التالفة أو منتهية الصلاحية.
 
 ═══════════════════════════════════════════════════════════════════
-📋 قائمة القطاعات المدعومة (مع أمثلة):
+📋 قائمة القطاعات المدعومة:
 ═══════════════════════════════════════════════════════════════════
 1. التجزئة والسوبرماركت: أطعمة، مشروبات معلبة، منتجات ألبان، أسعار على الرفوف
 2. الأدوات والمعدات: دريلات، مناشير، عدد يدوية، معدات صناعية
@@ -720,10 +725,9 @@ function buildMasterPrompt(ctx: GeoContext): string {
 6. الملابس والأزياء: قمصان، بناطيل، أحذية، شنط، ماركات
 7. الإلكترونيات: جوالات، لابتوبات، أجهزة لوحية، شاشات، مكونات إلكترونية
 8. السيارات وقطع الغيار: إطارات، بطاريات، زينة، قطع غيار
-9. أي مخزون آخر غير مصنف
 
 ═══════════════════════════════════════════════════════════════════
-⚠️ قواعد صارمة جداً (تطبق بصرامة عالية):
+⚠️ قواعد صارمة جداً:
 ═══════════════════════════════════════════════════════════════════
 1. أخرج JSON فقط — لا تضع أي نص قبله أو بعده
 2. لا تختلق منتجات غير مرئية في الصورة (Zero Hallucination)
@@ -732,6 +736,7 @@ function buildMasterPrompt(ctx: GeoContext): string {
 5. حدد الكمية (quantity) بدقة بناءً على العناصر المرئية
 6. عند وجود عدة عناصر متطابقة، احسب الكمية الإجمالية
 7. حدد مستوى الثقة (confidence) بصراحة
+8. اكشف المنتجات التالفة (damaged) أو منتهية الصلاحية (expired) إن أمكن
 
 ═══════════════════════════════════════════════════════════════════
 📤 مخرجات JSON المطلوبة:
@@ -740,6 +745,17 @@ function buildMasterPrompt(ctx: GeoContext): string {
   "business_type": "نوع النشاط التجاري",
   "analysis_quality": "excellent | good | fair | poor",
   "detected_items_count": 0,
+  "image_quality": {
+    "has_barcodes": false,
+    "has_qr_codes": false,
+    "has_prices_on_shelves": false,
+    "image_quality_score": 75,
+    "lighting_quality": "excellent|good|poor",
+    "suggested_improvements": [],
+    "has_damaged_items": false,
+    "has_expiry_dates": false,
+    "shelf_coverage_pct": 80
+  },
   "products": [
     {
       "product_name": "الاسم الدقيق للمنتج",
@@ -749,6 +765,9 @@ function buildMasterPrompt(ctx: GeoContext): string {
       "quantity": 1,
       "barcode_serial": "الباركود أو null",
       "confidence": "high | medium | low",
+      "condition": "good | damaged | expired | unknown",
+      "expiry_date": "تاريخ الصلاحية إن وجد أو null",
+      "location_hint": "موقع المنتج في الرف أو null",
       "notes": "تفاصيل إضافية"
     }
   ],
@@ -778,15 +797,18 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 }
 
 // ──────────────────────────────────────────────────────────────
-// 16. PRODUCT SANITIZER
+// 16. PRODUCT SANITIZER (موسع)
 // ──────────────────────────────────────────────────────────────
 
-function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
+function sanitizeEnhancedProduct(raw: any, lang: "ar" | "en"): EnhancedProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
 
   const confidence: Confidence =
     ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
+  
+  const condition: EnhancedProductItem['condition'] =
+    ["good", "damaged", "expired", "unknown"].includes(raw.condition) ? raw.condition : "unknown";
 
   return {
     product_name:   sanitize(raw.product_name || unknownLabel, 300),
@@ -799,11 +821,46 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
     barcode_serial: raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
     confidence,
     notes:          sanitize(raw.notes || "", 800),
+    condition,
+    expiry_date:    raw.expiry_date ? sanitize(raw.expiry_date, 50) : null,
+    location_hint:  raw.location_hint ? sanitize(raw.location_hint, 200) : null,
   };
 }
 
 // ──────────────────────────────────────────────────────────────
-// 17. POST HANDLER (الدالة الرئيسية)
+// 17. ANALYZE SINGLE IMAGE (جديد - دالة مساعدة)
+// ──────────────────────────────────────────────────────────────
+
+async function analyzeSingleImage(
+  base64: string,
+  mimeType: string,
+  ctx: GeoContext
+): Promise<{ products: EnhancedProductItem[]; parsedAI: any; imageQuality: any }> {
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature:      0.05,
+      topP:             0.9,
+      topK:             32,
+    },
+  });
+
+  const result = await withRetry(
+    () => model.generateContent([buildMasterPrompt(ctx), { inlineData: { data: base64, mimeType } }]),
+    "image-analysis"
+  );
+
+  const parsedAI = extractJSON<any>(result.response.text());
+  const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
+  const products = rawProducts.map(p => sanitizeEnhancedProduct(p, ctx.lang));
+  const imageQuality = parsedAI.image_quality || null;
+
+  return { products, parsedAI, imageQuality };
+}
+
+// ──────────────────────────────────────────────────────────────
+// 18. POST HANDLER (الدالة الرئيسية - معدلة لدعم صور متعددة)
 // ──────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -826,6 +883,7 @@ export async function POST(request: NextRequest) {
 
   let body: {
     image?:           string;
+    images?:          string[];    // جديد: دعم صور متعددة
     fetch_prices?:    boolean;
     country_override?: string;
   };
@@ -839,84 +897,97 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { image, fetch_prices = true, country_override } = body;
-
-  if (!image || typeof image !== "string") {
-    return NextResponse.json(
-      { success: false, error: "لم يُرسل حقل `image` في الطلب." },
-      { status: 400 }
-    );
-  }
-
+  const { fetch_prices = true, country_override } = body;
   const ctx = await resolveGeoContext(request, country_override);
 
-  // معالجة الصورة الأولية
-  let { base64, mimeType } = processImageInput(image);
+  // ──────────────────────────────────────────────────────────────
+  // معالجة الصور (دعم صورة واحدة أو مصفوفة صور)
+  // ──────────────────────────────────────────────────────────────
+  
+  let rawImages: string[] = [];
+  if (body.images && Array.isArray(body.images)) {
+    rawImages = body.images.slice(0, MAX_IMAGES_PER_REQ);
+  } else if (body.image && typeof body.image === "string") {
+    rawImages = [body.image];
+  }
 
-  if (!validateBase64(base64)) {
+  if (rawImages.length === 0) {
     return NextResponse.json(
-      { success: false, error: "صيغة الصورة غير صالحة." },
+      { success: false, error: "يجب إرسال حقل `image` أو `images` مع الطلب." },
       { status: 400 }
     );
   }
 
-  // تحويل وتحسين الصورة (يدعم جميع الصيغ)
-  let optimizedImage;
-  try {
-    optimizedImage = await convertAndOptimizeImage(base64, mimeType, 1024, 1024);
-    base64 = optimizedImage.base64;
-    mimeType = optimizedImage.mimeType;
-  } catch (convError) {
-    console.error("[IMAGE] Conversion failed:", convError);
-    return NextResponse.json(
-      { success: false, error: "نوع الصورة غير مدعوم أو تالف." },
-      { status: 400 }
-    );
-  }
+  // معالجة وتحسين كل صورة
+  const processedImages: Array<{ base64: string; mimeType: string; originalSize: number; optimizedSize: number }> = [];
+  
+  for (let i = 0; i < rawImages.length; i++) {
+    const img = rawImages[i];
+    let { base64, mimeType } = processImageInput(img);
 
-  const imageBytes = Buffer.byteLength(base64, "base64");
-  if (imageBytes > MAX_IMAGE_BYTES) {
-    return NextResponse.json(
-      { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB بعد التحسين.` },
-      { status: 413 }
-    );
-  }
-
-  // تحليل جودة الصورة (اختياري)
-  let qualityAnalysis;
-  try {
-    qualityAnalysis = await analyzeImageQuality(base64, mimeType);
-    if (qualityAnalysis.image_quality_score < 30) {
-      console.warn(`[QUALITY] Low image quality: ${qualityAnalysis.image_quality_score}/100`);
+    if (!validateBase64(base64)) {
+      return NextResponse.json(
+        { success: false, error: `الصورة رقم ${i + 1} بصيغة غير صالحة.` },
+        { status: 400 }
+      );
     }
-  } catch (qualityError) {
-    console.warn("[QUALITY] Analysis skipped:", qualityError);
-    qualityAnalysis = null;
+
+    try {
+      const optimized = await convertAndOptimizeImage(base64, mimeType, 1024, 1024);
+      const imageBytes = Buffer.byteLength(optimized.base64, "base64");
+      
+      if (imageBytes > MAX_IMAGE_BYTES) {
+        return NextResponse.json(
+          { success: false, error: `الصورة رقم ${i + 1} تتجاوز ${MAX_IMAGE_SIZE_MB}MB بعد التحسين.` },
+          { status: 413 }
+        );
+      }
+      
+      processedImages.push({
+        base64: optimized.base64,
+        mimeType: optimized.mimeType,
+        originalSize: optimized.originalSize,
+        optimizedSize: optimized.optimizedSize
+      });
+    } catch (convError) {
+      console.error(`[IMAGE] Conversion failed for image ${i + 1}:`, convError);
+      return NextResponse.json(
+        { success: false, error: `نوع الصورة رقم ${i + 1} غير مدعوم أو تالف.` },
+        { status: 400 }
+      );
+    }
   }
 
-  // تحليل الصورة باستخدام Gemini
-  let parsedAI: any;
-  try {
-    const model = genAI.getGenerativeModel({
-      model: MODEL_NAME,
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature:      0.05,
-        topP:             0.9,
-        topK:             32,
-      },
-    });
+  // ──────────────────────────────────────────────────────────────
+  // تحليل كل الصور بالتوازي
+  // ──────────────────────────────────────────────────────────────
+  
+  let allProductsArrays: EnhancedProductItem[][] = [];
+  let combinedParsedAI: any = null;
+  let bestImageQuality: any = null;
+  let failedImages = 0;
 
-    const aiResult = await withRetry(
-      () =>
-        model.generateContent([
-          buildMasterPrompt(ctx),
-          { inlineData: { data: base64, mimeType } },
-        ]),
-      "image-analysis"
+  try {
+    const analysisResults = await Promise.allSettled(
+      processedImages.map(img => analyzeSingleImage(img.base64, img.mimeType, ctx))
     );
 
-    parsedAI = extractJSON<any>(aiResult.response.text());
+    for (const result of analysisResults) {
+      if (result.status === "fulfilled") {
+        allProductsArrays.push(result.value.products);
+        
+        if (!combinedParsedAI) {
+          combinedParsedAI = result.value.parsedAI;
+        }
+        
+        if (!bestImageQuality && result.value.imageQuality) {
+          bestImageQuality = result.value.imageQuality;
+        }
+      } else {
+        failedImages++;
+        console.warn("[ANALYZE] One image failed:", result.reason?.message);
+      }
+    }
   } catch (err: any) {
     console.error("[ANALYZE] AI error:", err?.message);
 
@@ -933,11 +1004,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // تنقية المنتجات
-  const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
-  let products: ProductItem[] = rawProducts.map(p => sanitizeProduct(p, ctx.lang));
+  if (allProductsArrays.length === 0) {
+    return NextResponse.json(
+      { success: false, error: "فشل تحليل جميع الصور. تأكد من وضوحها." },
+      { status: 500 }
+    );
+  }
 
+  // دمج المنتجات من جميع الصور وإزالة التكرار
+  let products = mergeProductsFromMultipleImages(allProductsArrays);
+
+  // ──────────────────────────────────────────────────────────────
   // جلب الأسعار
+  // ──────────────────────────────────────────────────────────────
+  
   let pricesFetched = false;
   let savedCalls = 0;
   let uniqueCount = 0;
@@ -964,9 +1044,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // حساب الإجمالي
+  // ──────────────────────────────────────────────────────────────
+  // حساب الإجمالي والتحذيرات
+  // ──────────────────────────────────────────────────────────────
+  
   const totalValue = products.reduce((sum, p) => {
-    return p.unit_price ? sum + p.unit_price * (p.quantity ?? 1) : sum;
+    const qty = typeof p.quantity === "number" ? p.quantity : parseInt(String(p.quantity)) || 0;
+    return p.unit_price ? sum + p.unit_price * qty : sum;
   }, 0);
 
   const formattedTotal = new Intl.NumberFormat(
@@ -975,23 +1059,47 @@ export async function POST(request: NextRequest) {
   ).format(totalValue);
 
   const analysisQuality =
-    ["excellent", "good", "fair", "poor"].includes(parsedAI.analysis_quality)
-      ? parsedAI.analysis_quality
+    ["excellent", "good", "fair", "poor"].includes(combinedParsedAI?.analysis_quality)
+      ? combinedParsedAI.analysis_quality
       : "fair";
 
-  // بناء الاستجابة النهائية
+  // إضافة تحذيرات للمنتجات التالفة أو المنتهية
+  const damagedCount = products.filter(p => p.condition === "damaged").length;
+  const expiredCount = products.filter(p => p.condition === "expired").length;
+  const extraWarnings: string[] = [];
+  
+  if (damagedCount > 0) {
+    extraWarnings.push(ctx.lang === "ar" 
+      ? `⚠️ ${damagedCount} منتج يبدو تالفاً — يرجى المراجعة`
+      : `⚠️ ${damagedCount} product appears damaged — please review`);
+  }
+  if (expiredCount > 0) {
+    extraWarnings.push(ctx.lang === "ar"
+      ? `🔴 ${expiredCount} منتج قد يكون منتهي الصلاحية`
+      : `🔴 ${expiredCount} product may be expired`);
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // بناء الاستجابة النهائية (بنفس هيكل الكود الأصلي مع إضافات)
+  // ──────────────────────────────────────────────────────────────
+  
   const response = {
     success: true,
     editable: true,
-    business_type: sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
+    business_type: sanitize(combinedParsedAI?.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
     analysis_quality: analysisQuality,
     detected_items_count: products.length,
     products: products.map(p => ({
       ...p,
-      _editable_fields: ["quantity", "unit_price", "product_name", "notes"]
+      _editable_fields: ["quantity", "unit_price", "product_name", "notes", "condition"]
     })),
-    warnings: Array.isArray(parsedAI.warnings) ? parsedAI.warnings.slice(0, 10).map((w: any) => sanitize(w)) : [],
-    suggestions: Array.isArray(parsedAI.suggestions) ? parsedAI.suggestions.slice(0, 5).map((s: any) => sanitize(s)) : [],
+    warnings: [
+      ...(Array.isArray(combinedParsedAI?.warnings) ? combinedParsedAI.warnings.slice(0, 10).map((w: any) => sanitize(w)) : []),
+      ...extraWarnings
+    ],
+    suggestions: Array.isArray(combinedParsedAI?.suggestions) 
+      ? combinedParsedAI.suggestions.slice(0, 5).map((s: any) => sanitize(s)) 
+      : [],
     detected_location: ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn,
     timestamp: new Date().toISOString(),
 
@@ -1007,42 +1115,46 @@ export async function POST(request: NextRequest) {
     total_estimated_value: totalValue,
     total_estimated_value_formatted: `${ctx.currency.symbol}${formattedTotal}`,
 
-    // معلومات جودة الصورة (جديدة)
-    image_quality_analysis: qualityAnalysis,
+    // معلومات جودة الصورة (جديد)
+    image_quality_analysis: bestImageQuality,
 
     // تعليمات التعديل اليدوي
     edit_instructions: {
-      ar: "يمكنك تعديل الكمية (quantity) والسعر (unit_price) يدوياً في الواجهة الأمامية",
-      en: "You can manually edit quantity and unit_price in the frontend"
+      ar: "يمكنك تعديل الكمية (quantity) والسعر (unit_price) والحالة (condition) يدوياً في الواجهة الأمامية",
+      en: "You can manually edit quantity, unit_price, and condition in the frontend"
     },
 
     // البيانات الأولية
     _raw_ai_response: {
-      business_type: parsedAI.business_type,
-      analysis_quality: parsedAI.analysis_quality,
-      warnings_count: parsedAI.warnings?.length || 0,
-      suggestions_count: parsedAI.suggestions?.length || 0
+      business_type: combinedParsedAI?.business_type,
+      analysis_quality: combinedParsedAI?.analysis_quality,
+      warnings_count: combinedParsedAI?.warnings?.length || 0,
+      suggestions_count: combinedParsedAI?.suggestions?.length || 0
     },
 
     // مقاييس الأداء والميزات المدعومة
     _meta: {
-      engine: "Universal Inventory Intelligence v5.0",
+      engine: "Universal Inventory Intelligence v5.2",
       model: MODEL_NAME,
       duration_ms: Date.now() - startTime,
       prices_fetched: pricesFetched,
       unique_products: uniqueCount,
       saved_api_calls: savedCalls,
       country_detected: ctx.countryCode,
+      images_processed: processedImages.length,
+      images_failed: failedImages,
+      multi_image: processedImages.length > 1,
       image_optimization: {
-        original_size_kb: optimizedImage ? (optimizedImage.originalSize / 1024).toFixed(1) : null,
-        optimized_size_kb: optimizedImage ? (optimizedImage.optimizedSize / 1024).toFixed(1) : null,
-        original_format: mimeType
+        total_original_size_kb: (processedImages.reduce((sum, img) => sum + img.originalSize, 0) / 1024).toFixed(1),
+        total_optimized_size_kb: (processedImages.reduce((sum, img) => sum + img.optimizedSize, 0) / 1024).toFixed(1)
       },
       supported_features: {
         all_image_formats: true,
         auto_conversion: true,
         price_caching: true,
-        quality_analysis: !!qualityAnalysis
+        quality_analysis: !!bestImageQuality,
+        condition_detection: true,
+        multi_image_support: true
       }
     },
   };
@@ -1051,7 +1163,7 @@ export async function POST(request: NextRequest) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 18. GET HANDLER
+// 19. GET HANDLER (موسع)
 // ──────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
@@ -1062,13 +1174,13 @@ export async function GET(request: NextRequest) {
     status_ar: "متصل",
     engine: "Universal Inventory Intelligence",
     engine_ar: "محرك الجرد الذكي الشامل",
-    version: "5.0.0",
+    version: "5.2.0",
     model: MODEL_NAME,
     timestamp: new Date().toISOString(),
     editable_output: true,
     edit_instructions: {
-      ar: "يمكنك تعديل الكميات والأسعار يدوياً بعد استلام النتيجة. الحقول القابلة للتعديل: quantity, unit_price, product_name, notes",
-      en: "You can manually edit quantities and prices after receiving the result. Editable fields: quantity, unit_price, product_name, notes"
+      ar: "يمكنك تعديل الكميات والأسعار والحالة يدوياً بعد استلام النتيجة. الحقول القابلة للتعديل: quantity, unit_price, product_name, notes, condition",
+      en: "You can manually edit quantities, prices, and condition after receiving the result. Editable fields: quantity, unit_price, product_name, notes, condition"
     },
     features: {
       auto_geo_detection: true,
@@ -1082,7 +1194,12 @@ export async function GET(request: NextRequest) {
       all_image_formats: true,
       auto_image_conversion: true,
       price_caching: true,
-      quality_analysis: true
+      quality_analysis: true,
+      condition_detection: true,
+      expiry_detection: true,
+      location_hints: true,
+      multi_image_support: true,
+      max_images_per_request: MAX_IMAGES_PER_REQ
     },
     supported_image_formats: [
       "JPEG", "PNG", "WebP", "GIF", "BMP", 
