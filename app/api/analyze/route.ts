@@ -1,8 +1,8 @@
 // app/api/analyze/route.ts
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  Universal Inventory Intelligence Engine — v5.2              ║
-// ║  Gemini 2.5 Flash · Multi-image · Condition Detection        ║
-// ║  تحليل الجودة مدمج · Cache محسّن · Arabic-first             ║
+// ║  Universal Inventory Intelligence Engine — v5.3              ║
+// ║  Multi-Model Support · Auto Fallback · Arabic-first         ║
+// ║  يدعم 4 موديلات احتياطية لحل مشكلة Quota                   ║
 // ╚══════════════════════════════════════════════════════════════╝
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,12 +16,22 @@ import type { ProductItem, Confidence } from "../../../types";
 // ──────────────────────────────────────────────────────────────
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
-const MODEL_NAME = "gemini-2.5-flash";
+
+// ✅ قائمة الموديلات المدعومة (ترتيب الأولوية - Auto Fallback)
+const SUPPORTED_MODELS = [
+  "gemini-2.5-flash",      // الأسرع والأحدث
+  "gemini-2.0-flash",      // بديل سريع
+  "gemini-1.5-flash",      // أبطأ لكن متاح
+  "gemini-1.5-pro",        // أكثر دقة لكن أبطأ
+];
+
+const MODEL_NAME = SUPPORTED_MODELS[0]; // للتوافق مع الكود القديم
 
 const MAX_IMAGE_SIZE_MB   = 10;
 const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
-const MAX_BODY_BYTES      = 25 * 1024 * 1024; // زيادة لدعم صور متعددة
-const MAX_IMAGES_PER_REQ  = 5;               // جديد: الحد الأقصى للصور في طلب واحد
+const MAX_BODY_BYTES      = 25 * 1024 * 1024;
+const MAX_IMAGES_PER_REQ  = 5;
+const MODEL_TIMEOUT_MS    = 45000; // 45 ثانية لكل موديل
 
 // دعم جميع أنواع الصور
 const ALLOWED_MIME_TYPES = new Set([
@@ -30,16 +40,19 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/svg+xml", "image/heic", "image/heif", "image/avif"
 ]);
 
-// الصيغ التي تحتاج تحويل
 const FORMATS_NEEDING_CONVERSION = new Set([
   "image/heic", "image/heif", "image/bmp", "image/tiff", "image/avif"
 ]);
 
-const MAX_RETRIES          = 4;
-const BASE_RETRY_DELAY_MS  = 3000;
+const MAX_RETRIES          = 2; // قللنا لأننا نستخدم عدة موديلات
+const BASE_RETRY_DELAY_MS  = 2000;
 const BATCH_PRICE_THRESHOLD = 6;
 const MAX_PARALLEL_CHUNKS   = 3;
-const CACHE_TTL           = 24 * 60 * 60 * 1000; // 24 ساعة
+const CACHE_TTL           = 24 * 60 * 60 * 1000;
+
+// ✅ تحليل Cache (لتجنب تكرار الطلبات لنفس الصورة)
+const analysisCache = new Map<string, any>();
+const ANALYSIS_CACHE_TTL = 60 * 60 * 1000; // ساعة
 
 // ──────────────────────────────────────────────────────────────
 // 2. TYPES (موسعة)
@@ -82,7 +95,6 @@ interface PriceCacheEntry {
   expiresAt: number;
 }
 
-// جديد: نوع لتحليل جودة الصورة
 interface ImageQualityAnalysis {
   has_barcodes: boolean;
   has_qr_codes: boolean;
@@ -95,7 +107,6 @@ interface ImageQualityAnalysis {
   shelf_coverage_pct: number;
 }
 
-// جديد: نوع للمنتج مع حالة
 interface EnhancedProductItem extends ProductItem {
   condition: 'good' | 'damaged' | 'expired' | 'unknown';
   expiry_date: string | null;
@@ -197,6 +208,28 @@ async function cachePrice(productKey: string, currencyCode: string, price: Price
   console.log(`[CACHE] Stored ${productKey} in ${currencyCode}`);
 }
 
+// ✅ CACHE HELPERS FOR ANALYSIS
+async function getCachedAnalysis(imageHash: string): Promise<any | null> {
+  const cached = analysisCache.get(imageHash);
+  if (cached && Date.now() < cached.expiresAt) {
+    console.log(`[CACHE] Analysis hit for ${imageHash.substring(0, 20)}...`);
+    return cached.data;
+  }
+  return null;
+}
+
+async function setCachedAnalysis(imageHash: string, data: any) {
+  analysisCache.set(imageHash, {
+    data,
+    expiresAt: Date.now() + ANALYSIS_CACHE_TTL,
+  });
+  console.log(`[CACHE] Stored analysis for ${imageHash.substring(0, 20)}...`);
+}
+
+function getImageHash(base64: string): string {
+  return base64.substring(0, 100);
+}
+
 // ──────────────────────────────────────────────────────────────
 // 5. CONTEXT RESOLUTION
 // ──────────────────────────────────────────────────────────────
@@ -283,7 +316,7 @@ async function withTimeout<T>(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 8. RETRY WITH EXPONENTIAL BACK-OFF
+// 8. RETRY WITH EXPONENTIAL BACK-OFF (للموديل الواحد فقط)
 // ──────────────────────────────────────────────────────────────
 
 async function withRetry<T>(
@@ -657,7 +690,7 @@ async function fetchMarketPrices(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 13. MERGE PRODUCTS FROM MULTIPLE IMAGES (جديد)
+// 13. MERGE PRODUCTS FROM MULTIPLE IMAGES
 // ──────────────────────────────────────────────────────────────
 
 function mergeProductsFromMultipleImages(productsArray: EnhancedProductItem[][]): EnhancedProductItem[] {
@@ -669,18 +702,15 @@ function mergeProductsFromMultipleImages(productsArray: EnhancedProductItem[][])
       
       if (seen.has(key)) {
         const existing = seen.get(key)!;
-        // دمج الكميات
         const existingQty = typeof existing.quantity === "number" ? existing.quantity : parseInt(String(existing.quantity)) || 0;
         const newQty = typeof p.quantity === "number" ? p.quantity : parseInt(String(p.quantity)) || 0;
         existing.quantity = existingQty + newQty;
         
-        // دمج الثقة (خذ الأعلى)
         const confRank = { high: 3, medium: 2, low: 1 };
         if (confRank[p.confidence] > confRank[existing.confidence]) {
           existing.confidence = p.confidence;
         }
         
-        // إذا كان أحدهما تالفاً، سجل ذلك
         if (p.condition === 'damaged' || p.condition === 'expired') {
           existing.condition = p.condition;
         }
@@ -694,7 +724,7 @@ function mergeProductsFromMultipleImages(productsArray: EnhancedProductItem[][])
 }
 
 // ──────────────────────────────────────────────────────────────
-// 14. MASTER PROMPT BUILDER (موسع مع condition detection)
+// 14. MASTER PROMPT BUILDER
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
@@ -722,8 +752,7 @@ function buildMasterPrompt(ctx: GeoContext): string {
 3. الأثاث والديكور: كراسي، طاولات، خزائن، إضاءة، سجاد
 4. الخدمات اللوجستية: صناديق كرتون، باليتات، منصات شحن، باركود شحن
 5. الصيدليات: أدوية، مكملات غذائية، مستلزمات طبية، باركود دوائي
-6. الملابس والأزياء: قمصان، بناطيل، أحذية، شنط، ماركات
-7. الإلكترونيات: جوالات، لابتوبات، أجهزة لوحية، شاشات، مكونات إلكترونية
+6. الملابس والأزياء: قمصان، بناطيل، أحذية، شنط، ماركات7. الإلكترونيات: جوالات، لابتوبات، أجهزة لوحية، شاشات، مكونات إلكترونية
 8. السيارات وقطع الغيار: إطارات، بطاريات، زينة، قطع غيار
 
 ═══════════════════════════════════════════════════════════════════
@@ -828,39 +857,101 @@ function sanitizeEnhancedProduct(raw: any, lang: "ar" | "en"): EnhancedProductIt
 }
 
 // ──────────────────────────────────────────────────────────────
-// 17. ANALYZE SINGLE IMAGE (جديد - دالة مساعدة)
+// 17. ANALYZE WITH MULTIPLE MODELS (AUTO FALLBACK) ⭐核心改进⭐
+// ──────────────────────────────────────────────────────────────
+
+async function analyzeWithMultipleModels(
+  base64: string,
+  mimeType: string,
+  ctx: GeoContext
+): Promise<{ products: EnhancedProductItem[]; parsedAI: any; imageQuality: any; modelUsed: string }> {
+  const errors: string[] = [];
+  
+  for (let i = 0; i < SUPPORTED_MODELS.length; i++) {
+    const modelName = SUPPORTED_MODELS[i];
+    
+    try {
+      console.log(`[MODEL] 🔄 Trying ${modelName} (${i + 1}/${SUPPORTED_MODELS.length})`);
+      
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.05,
+          topP: 0.9,
+          topK: 32,
+        },
+      });
+
+      const result = await withTimeout(
+        model.generateContent([buildMasterPrompt(ctx), { inlineData: { data: base64, mimeType } }]),
+        MODEL_TIMEOUT_MS,
+        `Timeout on ${modelName} after ${MODEL_TIMEOUT_MS / 1000}s`
+      );
+
+      const parsedAI = extractJSON<any>(result.response.text());
+      const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
+      const products = rawProducts.map(p => sanitizeEnhancedProduct(p, ctx.lang));
+      const imageQuality = parsedAI.image_quality || null;
+
+      console.log(`[MODEL] ✅ Success with ${modelName}`);
+      return { products, parsedAI, imageQuality, modelUsed: modelName };
+      
+    } catch (err: any) {
+      const errorMsg = err?.message || err?.status || String(err);
+      const status = err?.status;
+      
+      console.warn(`[MODEL] ❌ ${modelName} failed:`, errorMsg.substring(0, 100));
+      errors.push(`${modelName}: ${status || errorMsg.substring(0, 50)}`);
+      
+      // إذا كان الخطأ 429 (Quota) أو 503 (High demand)، ننتقل للموديل التالي
+      if (status === 429 || status === 503 || errorMsg.includes("quota") || errorMsg.includes("high demand")) {
+        console.log(`[MODEL] ⏩ Quota/Overload on ${modelName}, switching to next model...`);
+        
+        if (i < SUPPORTED_MODELS.length - 1) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+        continue;
+      }
+      
+      // إذا كان الخطأ 400 (Bad Request - مشكلة في الصورة)، نوقف المحاولات
+      if (status === 400 || errorMsg.includes("image") || errorMsg.includes("format")) {
+        throw err;
+      }
+    }
+  }
+  
+  throw new Error(`All ${SUPPORTED_MODELS.length} models failed: ${errors.join(" | ")}`);
+}
+
+// ──────────────────────────────────────────────────────────────
+// 18. ANALYZE SINGLE IMAGE (معدلة - مع Cache و Multi-Model)
 // ──────────────────────────────────────────────────────────────
 
 async function analyzeSingleImage(
   base64: string,
   mimeType: string,
   ctx: GeoContext
-): Promise<{ products: EnhancedProductItem[]; parsedAI: any; imageQuality: any }> {
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature:      0.05,
-      topP:             0.9,
-      topK:             32,
-    },
-  });
-
-  const result = await withRetry(
-    () => model.generateContent([buildMasterPrompt(ctx), { inlineData: { data: base64, mimeType } }]),
-    "image-analysis"
-  );
-
-  const parsedAI = extractJSON<any>(result.response.text());
-  const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
-  const products = rawProducts.map(p => sanitizeEnhancedProduct(p, ctx.lang));
-  const imageQuality = parsedAI.image_quality || null;
-
-  return { products, parsedAI, imageQuality };
+): Promise<{ products: EnhancedProductItem[]; parsedAI: any; imageQuality: any; modelUsed?: string }> {
+  // ✅ تجربة الـ Cache أولاً
+  const imageHash = getImageHash(base64);
+  const cached = await getCachedAnalysis(imageHash);
+  if (cached) {
+    console.log(`[CACHE] Using cached result for image`);
+    return cached;
+  }
+  
+  // ✅ استخدام الموديلات المتعددة
+  const result = await analyzeWithMultipleModels(base64, mimeType, ctx);
+  
+  // ✅ حفظ النتيجة في الـ Cache
+  await setCachedAnalysis(imageHash, result);
+  
+  return result;
 }
 
 // ──────────────────────────────────────────────────────────────
-// 18. POST HANDLER (الدالة الرئيسية - معدلة لدعم صور متعددة)
+// 19. POST HANDLER (الدالة الرئيسية - معدلة)
 // ──────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -883,7 +974,7 @@ export async function POST(request: NextRequest) {
 
   let body: {
     image?:           string;
-    images?:          string[];    // جديد: دعم صور متعددة
+    images?:          string[];
     fetch_prices?:    boolean;
     country_override?: string;
   };
@@ -899,10 +990,6 @@ export async function POST(request: NextRequest) {
 
   const { fetch_prices = true, country_override } = body;
   const ctx = await resolveGeoContext(request, country_override);
-
-  // ──────────────────────────────────────────────────────────────
-  // معالجة الصور (دعم صورة واحدة أو مصفوفة صور)
-  // ──────────────────────────────────────────────────────────────
   
   let rawImages: string[] = [];
   if (body.images && Array.isArray(body.images)) {
@@ -958,14 +1045,12 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
   // تحليل كل الصور بالتوازي
-  // ──────────────────────────────────────────────────────────────
-  
   let allProductsArrays: EnhancedProductItem[][] = [];
   let combinedParsedAI: any = null;
   let bestImageQuality: any = null;
   let failedImages = 0;
+  let modelsUsed: string[] = [];
 
   try {
     const analysisResults = await Promise.allSettled(
@@ -975,14 +1060,9 @@ export async function POST(request: NextRequest) {
     for (const result of analysisResults) {
       if (result.status === "fulfilled") {
         allProductsArrays.push(result.value.products);
-        
-        if (!combinedParsedAI) {
-          combinedParsedAI = result.value.parsedAI;
-        }
-        
-        if (!bestImageQuality && result.value.imageQuality) {
-          bestImageQuality = result.value.imageQuality;
-        }
+        if (result.value.modelUsed) modelsUsed.push(result.value.modelUsed);
+        if (!combinedParsedAI) combinedParsedAI = result.value.parsedAI;
+        if (!bestImageQuality && result.value.imageQuality) bestImageQuality = result.value.imageQuality;
       } else {
         failedImages++;
         console.warn("[ANALYZE] One image failed:", result.reason?.message);
@@ -1014,10 +1094,7 @@ export async function POST(request: NextRequest) {
   // دمج المنتجات من جميع الصور وإزالة التكرار
   let products = mergeProductsFromMultipleImages(allProductsArrays);
 
-  // ──────────────────────────────────────────────────────────────
   // جلب الأسعار
-  // ──────────────────────────────────────────────────────────────
-  
   let pricesFetched = false;
   let savedCalls = 0;
   let uniqueCount = 0;
@@ -1044,10 +1121,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
   // حساب الإجمالي والتحذيرات
-  // ──────────────────────────────────────────────────────────────
-  
   const totalValue = products.reduce((sum, p) => {
     const qty = typeof p.quantity === "number" ? p.quantity : parseInt(String(p.quantity)) || 0;
     return p.unit_price ? sum + p.unit_price * qty : sum;
@@ -1063,7 +1137,6 @@ export async function POST(request: NextRequest) {
       ? combinedParsedAI.analysis_quality
       : "fair";
 
-  // إضافة تحذيرات للمنتجات التالفة أو المنتهية
   const damagedCount = products.filter(p => p.condition === "damaged").length;
   const expiredCount = products.filter(p => p.condition === "expired").length;
   const extraWarnings: string[] = [];
@@ -1079,10 +1152,7 @@ export async function POST(request: NextRequest) {
       : `🔴 ${expiredCount} product may be expired`);
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // بناء الاستجابة النهائية (بنفس هيكل الكود الأصلي مع إضافات)
-  // ──────────────────────────────────────────────────────────────
-  
+  // بناء الاستجابة النهائية
   const response = {
     success: true,
     editable: true,
@@ -1103,7 +1173,6 @@ export async function POST(request: NextRequest) {
     detected_location: ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn,
     timestamp: new Date().toISOString(),
 
-    // معلومات العملة
     currency_info: {
       code: ctx.currency.code,
       symbol: ctx.currency.symbol,
@@ -1111,20 +1180,16 @@ export async function POST(request: NextRequest) {
       exchange_rate_to_usd: ctx.currency.exchangeRateToUSD,
     },
 
-    // القيم المالية
     total_estimated_value: totalValue,
     total_estimated_value_formatted: `${ctx.currency.symbol}${formattedTotal}`,
 
-    // معلومات جودة الصورة (جديد)
     image_quality_analysis: bestImageQuality,
 
-    // تعليمات التعديل اليدوي
     edit_instructions: {
       ar: "يمكنك تعديل الكمية (quantity) والسعر (unit_price) والحالة (condition) يدوياً في الواجهة الأمامية",
       en: "You can manually edit quantity, unit_price, and condition in the frontend"
     },
 
-    // البيانات الأولية
     _raw_ai_response: {
       business_type: combinedParsedAI?.business_type,
       analysis_quality: combinedParsedAI?.analysis_quality,
@@ -1132,10 +1197,10 @@ export async function POST(request: NextRequest) {
       suggestions_count: combinedParsedAI?.suggestions?.length || 0
     },
 
-    // مقاييس الأداء والميزات المدعومة
     _meta: {
-      engine: "Universal Inventory Intelligence v5.2",
-      model: MODEL_NAME,
+      engine: "Universal Inventory Intelligence v5.3",
+      model: modelsUsed[0] || SUPPORTED_MODELS[0],
+      models_tried: modelsUsed,
       duration_ms: Date.now() - startTime,
       prices_fetched: pricesFetched,
       unique_products: uniqueCount,
@@ -1154,7 +1219,8 @@ export async function POST(request: NextRequest) {
         price_caching: true,
         quality_analysis: !!bestImageQuality,
         condition_detection: true,
-        multi_image_support: true
+        multi_image_support: true,
+        auto_fallback_models: true
       }
     },
   };
@@ -1163,7 +1229,7 @@ export async function POST(request: NextRequest) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 19. GET HANDLER (موسع)
+// 20. GET HANDLER (موسع)
 // ──────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
@@ -1174,8 +1240,9 @@ export async function GET(request: NextRequest) {
     status_ar: "متصل",
     engine: "Universal Inventory Intelligence",
     engine_ar: "محرك الجرد الذكي الشامل",
-    version: "5.2.0",
-    model: MODEL_NAME,
+    version: "5.3.0",
+    model: SUPPORTED_MODELS,
+    fallback_models: SUPPORTED_MODELS,
     timestamp: new Date().toISOString(),
     editable_output: true,
     edit_instructions: {
@@ -1199,6 +1266,7 @@ export async function GET(request: NextRequest) {
       expiry_detection: true,
       location_hints: true,
       multi_image_support: true,
+      auto_fallback_models: true,
       max_images_per_request: MAX_IMAGES_PER_REQ
     },
     supported_image_formats: [
