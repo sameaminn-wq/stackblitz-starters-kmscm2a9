@@ -161,40 +161,116 @@ function ProductCard({
 }
 
 // ============================================================
-// Camera / Upload Component
+// Camera / Upload Component (معدل لدعم صور متعددة)
 // ============================================================
-function ImageCapture({ onCapture, disabled }: { onCapture: (img: string) => void; disabled: boolean }) {
+function ImageCapture({ onCapture, onCaptureMultiple, disabled }: { 
+  onCapture: (img: string) => void; 
+  onCaptureMultiple?: (imgs: string[]) => void;
+  disabled: boolean; 
+}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const [selectedCount, setSelectedCount] = useState(0);
 
-  const readFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      if (e.target?.result) onCapture(e.target.result as string);
-    };
-    reader.readAsDataURL(file);
+  const readFiles = (files: FileList) => {
+    const fileArray = Array.from(files);
+    setSelectedCount(fileArray.length);
+    
+    if (fileArray.length === 1) {
+      // صورة واحدة → استخدم onCapture القديم للتوافق
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (e.target?.result) onCapture(e.target.result as string);
+        setTimeout(() => setSelectedCount(0), 2000);
+      };
+      reader.readAsDataURL(fileArray[0]);
+    } else if (fileArray.length > 1 && onCaptureMultiple) {
+      // عدة صور → استخدم onCaptureMultiple
+      Promise.all(
+        fileArray.map((file) => {
+          return new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target?.result as string);
+            reader.readAsDataURL(file);
+          });
+        })
+      ).then((images) => {
+        onCaptureMultiple(images);
+        setTimeout(() => setSelectedCount(0), 2000);
+      });
+    }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      readFiles(files);
+    }
+    // إعادة تعيين الـ input ليسمح بنفس الملفات مرة أخرى
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const handleCameraChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) readFile(file);
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) onCapture(ev.target.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+    if (cameraRef.current) cameraRef.current.value = "";
   };
 
   return (
     <div className="capture-zone">
       <div className="capture-icon">📷</div>
       <p className="capture-title">التقط صورة الرف أو ارفع صورة</p>
-      <p className="capture-sub">JPEG · PNG · WEBP · حتى 10MB</p>
+      <p className="capture-sub">JPEG · PNG · WEBP · حتى 10MB (يدعم عدة صور)</p>
+      <p className="capture-sub" style={{ fontSize: "0.7rem", color: "#60a5fa", marginTop: "-0.5rem" }}>
+        💡 يمكنك اختيار عدة صور مرة واحدة (Ctrl + Click أو Shift + Click)
+      </p>
       <div className="capture-buttons">
         <button className="btn btn-primary" disabled={disabled} onClick={() => cameraRef.current?.click()}>
           📸 كاميرا
         </button>
         <button className="btn btn-secondary" disabled={disabled} onClick={() => fileRef.current?.click()}>
-          📁 رفع صورة
+          📁 رفع صور (يدعم متعدد)
         </button>
       </div>
-      <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleChange} />
-      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleChange} />
+      <input 
+        ref={fileRef} 
+        type="file" 
+        accept="image/*" 
+        multiple
+        className="hidden" 
+        onChange={handleFileChange} 
+      />
+      <input 
+        ref={cameraRef} 
+        type="file" 
+        accept="image/*" 
+        capture="environment" 
+        className="hidden" 
+        onChange={handleCameraChange} 
+      />
+      
+      {/* عرض عدد الصور المختارة */}
+      {selectedCount > 0 && (
+        <div style={{ 
+          marginTop: "1rem", 
+          padding: "0.5rem",
+          background: selectedCount === 1 ? "rgba(16,185,129,0.15)" : "rgba(59,130,246,0.15)",
+          borderRadius: "10px",
+          fontSize: "0.75rem",
+          color: selectedCount === 1 ? "#34d399" : "#60a5fa",
+          transition: "all 0.3s ease"
+        }}>
+          {selectedCount === 1 
+            ? "✅ تم اختيار صورة واحدة للتحليل" 
+            : `✅ تم اختيار ${selectedCount} صور للتحليل المتزامن`}
+        </div>
+      )}
     </div>
   );
 }
@@ -1019,11 +1095,12 @@ function InvoiceModal({
 }
 
 // ============================================================
-// Main Component - هذه هي الصفحة الرئيسية
+// Main Component - هذه هي الصفحة الرئيسية (معدلة)
 // ============================================================
 export default function InventoryScannerPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isAnalyzingMultiple, setIsAnalyzingMultiple] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [previewImg, setPreviewImg] = useState<string | null>(null);
@@ -1033,6 +1110,7 @@ export default function InventoryScannerPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [currency, setCurrency] = useState<Currency>(CURRENCIES[0]);
   const [showInvoice, setShowInvoice] = useState(false);
+  const [processingImagesCount, setProcessingImagesCount] = useState(0);
 
   useEffect(() => {
     setIsMounted(true);
@@ -1045,6 +1123,7 @@ export default function InventoryScannerPage() {
     }
   }, []);
 
+  // دالة لمعالجة صورة واحدة (للتوافق مع الإصدارات السابقة)
   const handleCapture = useCallback(async (imageData: string) => {
     setPreviewImg(imageData);
     setLoading(true);
@@ -1091,6 +1170,68 @@ export default function InventoryScannerPage() {
       setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  // جديدة: دالة لمعالجة عدة صور
+  const handleCaptureMultiple = useCallback(async (imagesData: string[]) => {
+    if (imagesData.length === 0) return;
+    
+    // عرض أول صورة كمعاينة
+    setPreviewImg(imagesData[0]);
+    setProcessingImagesCount(imagesData.length);
+    setIsAnalyzingMultiple(true);
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setExportSuccess(false);
+
+    try {
+      console.log(`📸 جاري تحليل ${imagesData.length} صور...`);
+      
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          images: imagesData,  // إرسال مصفوفة الصور
+          fetch_prices: true,
+        }),
+      });
+
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        const rawText = await res.text();
+        console.error("Non-JSON response from server:", rawText.substring(0, 300));
+        throw new Error(`الخادم أرجع استجابة غير متوقعة (${res.status})`);
+      }
+
+      let data: AnalysisResult;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+      }
+
+      if (!res.ok || !data.success) {
+        const serverError = (data as { error?: string; detail?: string }).error
+          ?? (data as { detail?: string }).detail
+          ?? `خطأ ${res.status}: فشل التحليل`;
+        throw new Error(serverError);
+      }
+
+      if (!Array.isArray(data.products)) {
+        throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
+      }
+
+      setResult(data);
+      console.log(`✅ تم تحليل ${imagesData.length} صور، تم اكتشاف ${data.products.length} منتج فريد`);
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
+    } finally {
+      setLoading(false);
+      setIsAnalyzingMultiple(false);
+      setProcessingImagesCount(0);
     }
   }, []);
 
@@ -1203,11 +1344,17 @@ export default function InventoryScannerPage() {
     setPreviewImg(null);
     setError(null);
     setExportSuccess(false);
+    setProcessingImagesCount(0);
   };
 
   const highConfidence = result?.products.filter((p) => p.confidence === "high").length ?? 0;
 
   if (!isMounted) return null;
+
+  const isLoading = loading || isAnalyzingMultiple;
+  const loadingText = isAnalyzingMultiple 
+    ? `جاري تحليل ${processingImagesCount} صور...`
+    : "جاري تحليل الرفوف بالذكاء الاصطناعي...";
 
   return (
     <>
@@ -1412,22 +1559,32 @@ export default function InventoryScannerPage() {
         </header>
 
         <main className="main">
-          {previewImg && (
+          {previewImg && !isLoading && (
             <div className="image-preview">
               <img src={previewImg} alt="صورة الرف" />
               <div className="image-preview-overlay">
-                {loading ? "جاري تحليل الصورة..." : `تم تحليل ${result?.total_products_detected ?? 0} منتج`}
+                {result ? `تم تحليل ${result?.total_products_detected ?? 0} منتج` : "تم التقاط الصورة"}
               </div>
             </div>
           )}
 
-          {!result && !loading && <ImageCapture onCapture={handleCapture} disabled={loading} />}
+          {!result && !isLoading && (
+            <ImageCapture 
+              onCapture={handleCapture} 
+              onCaptureMultiple={handleCaptureMultiple}
+              disabled={isLoading} 
+            />
+          )}
 
-          {loading && (
+          {isLoading && (
             <div className="loading-wrapper">
               <div className="loading-spinner" />
-              <p style={{ color: "#94a3b8", fontSize: "0.9rem", fontWeight: 600 }}>جاري تحليل الرفوف بالذكاء الاصطناعي...</p>
-              <p style={{ color: "#475569", fontSize: "0.75rem", marginTop: "0.3rem" }}>يرجى الانتظار، يتم فحص المنتجات</p>
+              <p style={{ color: "#94a3b8", fontSize: "0.9rem", fontWeight: 600 }}>{loadingText}</p>
+              {isAnalyzingMultiple && processingImagesCount > 1 && (
+                <p style={{ color: "#475569", fontSize: "0.75rem", marginTop: "0.3rem" }}>
+                  يتم دمج النتائج من {processingImagesCount} صورة تلقائياً
+                </p>
+              )}
               <div className="loading-dots">
                 <div className="dot" /><div className="dot" /><div className="dot" />
               </div>
@@ -1444,7 +1601,7 @@ export default function InventoryScannerPage() {
             </div>
           )}
 
-          {result && !loading && (
+          {result && !isLoading && (
             <>
               <div className="stats-bar">
                 <StatCard label="إجمالي المنتجات" value={result.total_products_detected} icon="📦" />
