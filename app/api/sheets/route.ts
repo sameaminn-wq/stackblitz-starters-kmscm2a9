@@ -107,7 +107,10 @@ for (let i = 0; i < products.length; i++) {
     qty.toString(),
     price.toFixed(2),
     total.toFixed(2),
-    String(product.barcode || "").substring(0, 12),
+// السطر 110 القديم: String(product.barcode || "").substring(0, 12),
+
+// السطر الجديد (التصحيح):
+String(product.barcode_serial || "").substring(0, 12),
     String(product.notes || "").substring(0, 20)
   ];
 
