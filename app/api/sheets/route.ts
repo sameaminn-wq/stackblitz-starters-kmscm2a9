@@ -116,29 +116,53 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
     y -= 20;
 
     if (y < margin) {
-      page.addPage();
+      // 1. إضافة صفحة جديدة وتحديث المتغير (تأكد أن page معرف بـ let في البداية)
+      page = pdfDoc.addPage(); 
+      
+      // 2. إعادة ضبط الإحداثيات للبقاء داخل الهوامش
       y = height - margin;
-      // إعادة رسم رأس الجدول للصفحة الجديدة
-      x = margin;
+      let headerX = margin; 
+
+      // 3. إعادة رسم رؤوس الجدول في الصفحة الجديدة
       for (let j = 0; j < tableHeaders.length; j++) {
-        page.drawText(tableHeaders[j], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
-        x += columnWidths[j];
+        page.drawText(tableHeaders[j], { 
+          x: headerX, 
+          y: y, 
+          font: font, 
+          size: fontSize, 
+          color: rgb(0, 0, 0) 
+        });
+        headerX += columnWidths[j];
       }
+      
+      // 4. رسم الخط الفاصل تحت الرؤوس الجديدة
       y -= 15;
-      page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
+      page.drawLine({ 
+        start: { x: margin, y: y }, 
+        end: { x: width - margin, y: y }, 
+        color: rgb(0, 0, 0), 
+        thickness: 1 
+      });
       y -= 10;
     }
+    // هنا ينتهي بلوك التحقق من المساحة ويستكمل رسم الصفوف بشكل طبيعي
   }
 
-  // الإجمالي الكلي
-  y -= 20;
-  page.drawText(`الإجمالي الكلي: ${totalAmount.toFixed(2)} ${exportDetails.currency || "USD"}`, {
-    x: width - margin - 150,
-    y: y,
-    font: font,
-    size: fontSize + 2,
-    color: rgb(0, 0, 0),
-  });
+ // التأكد من وجود مساحة للإجمالي، وإلا نفتح صفحة جديدة له
+ if (y < margin + 40) {
+  page = pdfDoc.addPage();
+  y = height - margin;
+}
+
+y -= 30;
+page.drawText(`الإجمالي الكلي: ${totalAmount.toFixed(2)} ${exportDetails.currency || "USD"}`, {
+  x: width - margin - 200, // تحريك لليسار قليلاً لضمان عدم الخروج
+  y: y,
+  font: font,
+  size: fontSize + 2,
+  color: rgb(0, 0, 0),
+});
+ 
 
   return Buffer.from(await pdfDoc.save());
 }
