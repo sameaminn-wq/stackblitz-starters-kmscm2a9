@@ -1099,26 +1099,29 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const confidence: Confidence =
     ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
 
-    return {
-      product_name:     sanitize(raw.product_name || unknownLabel, 300),
-      brand:            raw.brand ? sanitize(raw.brand, 150) : null,
-      category:         sanitize(raw.category || generalLabel, 150),
-      unit_price:       null,
-      quantity:         typeof raw.quantity === 'number' ? raw.quantity : 1,
-      // ✅ قم بتغيير الاسم من barcode_serial إلى barcode فقط
-      barcode:          raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null, 
-      confidence:       validConfidence,
-      notes:            sanitize(raw.notes || "", 500),
-      
-      // الحقول الإضافية التي أصلحناها للـ Build سابقاً
-      id:               `prod_${Math.random().toString(36).substr(2, 9)}`,
-      fallback_level:   0,
-      detection_method: "vision_ai",
-      confidence_score: validConfidence === "high" ? 0.95 : (validConfidence === "medium" ? 0.75 : 0.45),
-      price_status:     "estimated",
-      last_updated:     new Date().toISOString(),
-      is_verified:      false
-    };
+    // تأكد أنك تستخرج القيمة الصحيحة من raw أولاً
+  const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
+
+  return {
+    product_name:     sanitize(raw.product_name || unknownLabel, 300),
+    brand:            raw.brand ? sanitize(raw.brand, 150) : null,
+    category:         sanitize(raw.category || generalLabel, 150),
+    unit_price:       null,
+    quantity:         typeof raw.quantity === 'number' ? raw.quantity : 1,
+    barcode:          raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null, 
+    // ✅ استخدم المتغير الذي عرفناه بالأعلى (currentConfidence)
+    confidence:       currentConfidence as Confidence,
+    notes:            sanitize(raw.notes || "", 500),
+    
+    id:               `prod_${Math.random().toString(36).substr(2, 9)}`,
+    fallback_level:   0,
+    detection_method: "vision_ai",
+    // ✅ استخدم المتخدم المتغير هنا أيضاً للحساب
+    confidence_score: currentConfidence === "high" ? 0.95 : (currentConfidence === "medium" ? 0.75 : 0.45),
+    price_status:     "estimated",
+    last_updated:     new Date().toISOString(),
+    is_verified:      false
+  };
 }
 
 // ──────────────────────────────────────────────────────────────
