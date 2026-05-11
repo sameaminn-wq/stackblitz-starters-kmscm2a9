@@ -1091,29 +1091,27 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 // ──────────────────────────────────────────────────────────────
 // 16. PRODUCT SANITIZER we went to see last oone 
 // ──────────────────────────────────────────────────────────────
-
 function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
 
-  // 1. تحديد مستوى الدقة بشكل آمن
   const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) 
     ? (raw.confidence as Confidence) 
     : ("medium" as Confidence);
 
-  // 2. إرجاع البيانات المطابقة تماماً لما يتوقعه ملف page.tsx (بدون زيادة أو نقصان)
   return {
     product_name: sanitize(raw.product_name || unknownLabel, 300),
     brand:        raw.brand ? sanitize(raw.brand, 150) : "",
     category:     sanitize(raw.category || generalLabel, 150),
-    // تحويل السعر لنص كما هو محدد في الواجهة ProductItem
+    // تحويل السعر لنص String لأن الواجهة في page.tsx سطر 17 تطلبه string
     unit_price:   raw.unit_price ? String(raw.unit_price) : "0.00",
     quantity:     typeof raw.quantity === 'number' ? raw.quantity : 1,
-    // توحيد المسمى ليكون barcode ليطابق تعريف الواجهة في page.tsx
+    // تغيير الاسم من barcode_serial إلى barcode ليطابق page.tsx سطر 19
     barcode:      sanitize(raw.barcode_serial || raw.barcode || "", 100),
     confidence:   currentConfidence,
     notes:        sanitize(raw.notes || "", 500)
   };
+
 }
 
 // ──────────────────────────────────────────────────────────────
