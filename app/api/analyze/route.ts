@@ -1115,12 +1115,7 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 // ──────────────────────────────────────────────────────────────
 // OPTIONS HANDLER (مطلوب للموبايل - Preflight CORS)
 // ──────────────────────────────────────────────────────────────
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: CORS_HEADERS,
-  });
-}
+
 // 17. POST HANDLER (الدالة الرئيسية)
 // ──────────────────────────────────────────────────────────────
 
