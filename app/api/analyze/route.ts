@@ -702,6 +702,10 @@ function buildMasterPrompt(ctx: GeoContext): string {
   const currency   = ctx.currency.code;
   const symbol     = ctx.currency.symbol;
   const country    = ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn;
+  // تعريف المتغيرات المفقودة لضمان نجاح الـ Build
+const batch_id = `batch_${Date.now()}`;
+const image_id = `img_${Math.random().toString(36).substr(2, 9)}`;
+const timestamp = new Date().toISOString();
 
   return `أنت "محرك الجرد البصري الشامل فائق الدقة v5.0"
   Multimodal Enterprise Inventory Vision Engine — MEIVE-5
