@@ -99,7 +99,7 @@ function ProductCard({
           </div>
         </div>
         <div className="product-card-right">
-<ConfidenceBadge level={item.confidence} />
+          <ConfidenceBadge level={item.confidence} />
           <span className="expand-icon">{expanded ? "▲" : "▼"}</span>
         </div>
       </div>
@@ -1021,7 +1021,7 @@ function InvoiceModal({
 // ============================================================
 // Main Component - هذه هي الصفحة الرئيسية
 // ============================================================
-export default function App() {
+export default function InventoryScannerPage() {
   const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1045,9 +1045,6 @@ export default function App() {
     }
   }, []);
 
-  // ============================================================
-  // دالة handleCapture - الحل النهائي للـ 404
-  // ============================================================
   const handleCapture = useCallback(async (imageData: string) => {
     setPreviewImg(imageData);
     setLoading(true);
@@ -1059,40 +1056,42 @@ export default function App() {
       setLoading(true);
       setError(null);
 
-      // الرابط الذكي: يتأكد من استخدام المسار الصحيح
-      // باستخدام "/api/analyze" بدون اسم الموقع الكامل
-      const apiUrl = "/api/analyze";
+      // 1. تحديد الرابط الذكي
+      const apiUrl = typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
+        ? "/api/analyze" 
+        : "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
 
+      // 2. تنفيذ الطلب (أعدنا إضافة الهيدرز لضمان قراءة JSON)
       const response = await fetch(apiUrl, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ image: imageData }),
       });
 
-      // التحقق من أن السيرفر موجود (لو رد بـ 404 سيتوقف هنا)
-      if (response.status === 404) {
-        throw new Error("لم يتم العثور على مسار التحليل (404). تأكد من رفع ملف route.ts في المجلد الصحيح.");
-      }
-
+      // 3. فحص نوع الرد
       const contentType = response.headers.get("content-type") ?? "";
+      
       if (!contentType.includes("application/json")) {
+        const status = response.status;
+        if (status === 404) throw new Error("لم يتم العثور على مسار التحليل (404). تأكد من رفع ملف route.ts");
         const rawText = await response.text();
-        console.error("Non-JSON response from server:", rawText.substring(0, 300));
-        throw new Error(
-          `الخادم أرجع استجابة غير متوقعة (${response.status}). تحقق من اتصال الإنترنت.`
-        );
+        console.error("Non-JSON response:", rawText.substring(0, 300));
+        throw new Error(`استجابة غير متوقعة من الخادم (${status})`);
       }
 
+      // 4. قراءة البيانات وتحويلها
       let data: AnalysisResult;
       try {
         data = await response.json();
       } catch {
-        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+        throw new Error("فشل في تحليل بيانات الرد من الخادم");
       }
 
+      // 5. التحقق من نجاح التحليل
       if (!response.ok || !data.success) {
-        const serverError = (data as any).error
-          ?? (data as any).detail
-          ?? `خطأ ${response.status}: فشل التحليل`;
+        const serverError = (data as any).error || `خطأ ${response.status}: فشل التحليل`;
         throw new Error(serverError);
       }
 
@@ -1100,12 +1099,12 @@ export default function App() {
         throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
       }
 
-      // تفعيل النتيجة في الشاشة
+      // 6. تحديث الحالة بالنتائج (الـ 22 منتجاً الذين رأيناهم في اللوجات)
       setResult(data);
-
+      
     } catch (err: any) {
-      console.error("Client Error:", err);
-      setError(err.message);
+      console.error("Analysis Error:", err);
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال");
     } finally {
       setLoading(false);
     }
