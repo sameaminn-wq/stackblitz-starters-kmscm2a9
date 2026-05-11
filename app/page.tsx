@@ -99,7 +99,7 @@ function ProductCard({
           </div>
         </div>
         <div className="product-card-right">
-          <ConfidenceBadge level={item.confidence} />
+<ConfidenceBadge level={item.confidence} />
           <span className="expand-icon">{expanded ? "▲" : "▼"}</span>
         </div>
       </div>
@@ -1021,7 +1021,7 @@ function InvoiceModal({
 // ============================================================
 // Main Component - هذه هي الصفحة الرئيسية
 // ============================================================
-export default function InventoryScannerPage() {
+export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1045,6 +1045,9 @@ export default function InventoryScannerPage() {
     }
   }, []);
 
+  // ============================================================
+  // دالة handleCapture - الحل النهائي للـ 404
+  // ============================================================
   const handleCapture = useCallback(async (imageData: string) => {
     setPreviewImg(imageData);
     setLoading(true);
@@ -1053,23 +1056,24 @@ export default function InventoryScannerPage() {
     setExportSuccess(false);
 
     try {
-      setLoading(true); // تأكد من تفعيل حالة التحميل
+      setLoading(true);
       setError(null);
 
-      // 1. تعريف الرابط الذكي (حل مشكلة الـ 404 والـ Preview)
-      const apiUrl = typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
-        ? "/api/analyze" 
-        : "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
+      // الرابط الذكي: يتأكد من استخدام المسار الصحيح
+      // باستخدام "/api/analyze" بدون اسم الموقع الكامل
+      const apiUrl = "/api/analyze";
 
       const response = await fetch(apiUrl, {
         method: "POST",
-        mode: "cors", 
-        // ❌ تم حذف سطر headers يدوياً للسماح للمتصفح بالتعامل مع الطلب ببساطة
         body: JSON.stringify({ image: imageData }),
       });
 
+      // التحقق من أن السيرفر موجود (لو رد بـ 404 سيتوقف هنا)
+      if (response.status === 404) {
+        throw new Error("لم يتم العثور على مسار التحليل (404). تأكد من رفع ملف route.ts في المجلد الصحيح.");
+      }
+
       const contentType = response.headers.get("content-type") ?? "";
-      
       if (!contentType.includes("application/json")) {
         const rawText = await response.text();
         console.error("Non-JSON response from server:", rawText.substring(0, 300));
@@ -1085,11 +1089,10 @@ export default function InventoryScannerPage() {
         throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
       }
 
-      // 2. تصحيح اسم المتغير من res إلى response هنا
       if (!response.ok || !data.success) {
-        const serverError = (data as any).error 
-          ?? (data as any).detail 
-          ?? `خطأ ${response.status}: فشل التحليل`; // تم التصحيح هنا
+        const serverError = (data as any).error
+          ?? (data as any).detail
+          ?? `خطأ ${response.status}: فشل التحليل`;
         throw new Error(serverError);
       }
 
@@ -1097,13 +1100,12 @@ export default function InventoryScannerPage() {
         throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
       }
 
-      // 3. تحديث الواجهة بالبيانات
+      // تفعيل النتيجة في الشاشة
       setResult(data);
-      // إذا كان لديك setItems(data.products) أضفها هنا أيضاً
-      
-    } catch (err) {
-      console.error("Fetch Error:", err);
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
+
+    } catch (err: any) {
+      console.error("Client Error:", err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
