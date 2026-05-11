@@ -1056,12 +1056,12 @@ export default function InventoryScannerPage() {
       setLoading(true);
       setError(null);
 
-      // 1. تحديد الرابط الذكي
+      // 1. الرابط الذكي: يوجه الطلب داخلياً لو كنت على الويب، وخارجياً لو كنت على الموبايل
       const apiUrl = typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
         ? "/api/analyze" 
         : "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
 
-      // 2. تنفيذ الطلب (أعدنا إضافة الهيدرز لضمان قراءة JSON)
+      // 2. إرسال الطلب (تأكدنا من إرفاق النوع الصحيح للبيانات)
       const response = await fetch(apiUrl, {
         method: "POST",
         headers: {
@@ -1070,41 +1070,35 @@ export default function InventoryScannerPage() {
         body: JSON.stringify({ image: imageData }),
       });
 
-      // 3. فحص نوع الرد
+      // 3. التحقق الفوري من حالة المسار (لحل مشكلة الـ 404)
+      if (response.status === 404) {
+        throw new Error("فشل الاتصال (404): المسار غير موجود على هذا السيرفر. تأكد من رفع ملف route.ts داخل مجلد app/api/analyze/");
+      }
+
       const contentType = response.headers.get("content-type") ?? "";
-      
       if (!contentType.includes("application/json")) {
-        const status = response.status;
-        if (status === 404) throw new Error("لم يتم العثور على مسار التحليل (404). تأكد من رفع ملف route.ts");
         const rawText = await response.text();
-        console.error("Non-JSON response:", rawText.substring(0, 300));
-        throw new Error(`استجابة غير متوقعة من الخادم (${status})`);
+        console.error("Server Response:", rawText.substring(0, 300));
+        throw new Error(`استجابة غير متوقعة من الخادم (${response.status})`);
       }
 
-      // 4. قراءة البيانات وتحويلها
-      let data: AnalysisResult;
-      try {
-        data = await response.json();
-      } catch {
-        throw new Error("فشل في تحليل بيانات الرد من الخادم");
-      }
+      // 4. استلام ومعالجة البيانات (الـ 22 منتجاً)
+      const data: AnalysisResult = await response.json();
 
-      // 5. التحقق من نجاح التحليل
       if (!response.ok || !data.success) {
-        const serverError = (data as any).error || `خطأ ${response.status}: فشل التحليل`;
-        throw new Error(serverError);
+        throw new Error((data as any).error || `خطأ في الخادم (${response.status})`);
       }
 
       if (!Array.isArray(data.products)) {
         throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
       }
 
-      // 6. تحديث الحالة بالنتائج (الـ 22 منتجاً الذين رأيناهم في اللوجات)
+      // 5. عرض النتائج على الشاشة
       setResult(data);
       
     } catch (err: any) {
-      console.error("Analysis Error:", err);
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال");
+      console.error("Detailed Fetch Error:", err);
+      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالسيرفر");
     } finally {
       setLoading(false);
     }
