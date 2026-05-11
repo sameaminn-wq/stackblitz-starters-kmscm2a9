@@ -167,15 +167,26 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   worksheet.addRow([`التاريخ: ${new Date().toLocaleDateString()}`]);
   worksheet.addRow([]); // صف فارغ
 
-  // رأس الجدول
-  const headers = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  worksheet.addRow(headers);
-  worksheet.getRow(worksheet.lastRow.number).font = { name: "Arial", size: 12, bold: true };
-  worksheet.getRow(worksheet.lastRow.number).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD3D3D3" } }; // رمادي فاتح
-    cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
-  });
+  // 1. إضافة صف الرأس وتخزينه في متغير
+const headerRow = worksheet.addRow(["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"]);
 
+// 2. التنسيق المباشر والآمن (إرضاء TypeScript)
+headerRow.font = { name: "Arial", size: 12, bold: true };
+
+headerRow.eachCell((cell) => {
+  cell.fill = { 
+    type: "pattern", 
+    pattern: "solid", 
+    fgColor: { argb: "FFD3D3D3" } // رمادي فاتح احترافي
+  };
+  cell.border = { 
+    top: { style: "thin" }, 
+    left: { style: "thin" }, 
+    bottom: { style: "thin" }, 
+    right: { style: "thin" } 
+  };
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }; // لمسة احترافية إضافية
+});
   // بيانات المنتجات
   let totalAmount = 0;
   products.forEach((product, index) => {
