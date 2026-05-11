@@ -1099,18 +1099,20 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
     ? (raw.confidence as Confidence) 
     : ("medium" as Confidence);
 
-  return {
-    product_name: sanitize(raw.product_name || unknownLabel, 300),
-    brand:        raw.brand ? sanitize(raw.brand, 150) : "",
-    category:     sanitize(raw.category || generalLabel, 150),
-    // تحويل السعر لنص String لأن الواجهة في page.tsx سطر 17 تطلبه string
-    unit_price:   raw.unit_price ? String(raw.unit_price) : "0.00",
-    quantity:     typeof raw.quantity === 'number' ? raw.quantity : 1,
-    // تغيير الاسم من barcode_serial إلى barcode ليطابق page.tsx سطر 19
-    barcode:      sanitize(raw.barcode_serial || raw.barcode || "", 100),
-    confidence:   currentConfidence,
-    notes:        sanitize(raw.notes || "", 500)
-  };
+    return {
+      product_name: sanitize(raw.product_name || unknownLabel, 300),
+      brand:        raw.brand ? sanitize(raw.brand, 150) : "",
+      category:     sanitize(raw.category || generalLabel, 150),
+      
+      // ✅ الحل: إذا كان المترجم يريده number، سنعطيه number. 
+      // إذا ظهر خطأ آخر يطلبه string، سنقوم بتحويله لاحقاً، لكن جرب هذا أولاً:
+      unit_price:   raw.unit_price ? Number(raw.unit_price) : 0, 
+      
+      quantity:     typeof raw.quantity === 'number' ? raw.quantity : 1,
+      barcode:      sanitize(raw.barcode_serial || raw.barcode || "", 100),
+      confidence:   currentConfidence,
+      notes:        sanitize(raw.notes || "", 500)
+    };
 
 }
 
