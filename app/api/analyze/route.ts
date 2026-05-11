@@ -431,9 +431,11 @@ function extractJSON<T>(raw: string): T {
     
     try {
       return JSON.parse(fixed);
-    } catch (secondError) {
+    }  catch (secondError) {
       console.error("[JSON] Failed to parse:", text.substring(0, 200));
-      throw new Error(`Invalid JSON format: ${firstError.message}`);
+      // التعديل هنا: نتحقق من نوع الخطأ قبل استخدامه
+      const errorMessage = firstError instanceof Error ? firstError.message : "Unknown error";
+      throw new Error(`Invalid JSON format: ${errorMessage}`);
     }
   }
 }
