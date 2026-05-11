@@ -238,7 +238,7 @@ function sanitize(text: unknown, maxLen = 500): string {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 7. TIMEOUT UTILITY (NEW)
+// 7. TIMEOUT UTILITY (FIXED)
 // ──────────────────────────────────────────────────────────────
 
 async function withTimeout<T>(
@@ -246,7 +246,8 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  // 1. تعريف المتغير بقيمة مبدئية لتجنب خطأ الـ Build
+  let timeoutId: NodeJS.Timeout | undefined = undefined;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -255,10 +256,12 @@ async function withTimeout<T>(
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeoutId);
+    // 2. لا نمسح الـ timeout إلا إذا كان موجوداً فعلياً
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
-
 // ──────────────────────────────────────────────────────────────
 // 8. RETRY WITH EXPONENTIAL BACK-OFF
 // ──────────────────────────────────────────────────────────────
