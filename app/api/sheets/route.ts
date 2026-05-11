@@ -219,16 +219,20 @@ headerRow.eachCell((cell) => {
   totalRow.getCell(6).alignment = { horizontal: "right" };
 
   // ضبط عرض الأعمدة
-  worksheet.columns.forEach(column => {
-    let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, cell => {
-      const columnLength = cell.value ? cell.value.toString().length : 10;
-      if (columnLength > maxLength) {
-        maxLength = columnLength;
-      }
-    });
-    column.width = maxLength < 10 ? 10 : maxLength + 2;
+ // ضبط عرض الأعمدة تلقائياً (Auto-fit columns)
+ worksheet.columns?.forEach(column => {
+  if (!column) return; // تأمين إضافي: إذا كان العمود غير موجود تخطاه
+
+  let maxLength = 0;
+  // إضافة علامة الاستقهام قبل النقاط لضمان عدم استدعاء دالة على undefined
+  column.eachCell?.({ includeEmpty: true }, (cell) => {
+    const columnLength = cell.value ? String(cell.value).length : 10;
+    if (columnLength > maxLength) {
+      maxLength = columnLength;
+    }
   });
+  column.width = maxLength < 12 ? 12 : maxLength + 2;
+});
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
