@@ -1055,19 +1055,16 @@ export default function InventoryScannerPage() {
     try {
       setLoading(true);
       setError(null);
-
-      // 1. الرابط الذكي: يوجه الطلب داخلياً لو كنت على الويب، وخارجياً لو كنت على الموبايل
-     // 1. الرابط الذكي: قمنا بتثبيت الرابط الأساسي لضمان أن الواجهة تجد السيرفر دائماً
+// استخدم الرابط الكامل دائماً لضمان الاتصال بالمحرك الذي يعمل فعلياً
 const apiUrl = "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
 
-      // 2. إرسال الطلب (تأكدنا من إرفاق النوع الصحيح للبيانات)
-      const response = await fetch(apiUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ image: imageData }),
-      });
+const response = await fetch(apiUrl, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ image: imageData }),
+});
 
       // 3. التحقق الفوري من حالة المسار (لحل مشكلة الـ 404)
       if (response.status === 404) {
