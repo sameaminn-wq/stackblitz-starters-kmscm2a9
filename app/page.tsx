@@ -1057,9 +1057,8 @@ export default function InventoryScannerPage() {
       setError(null);
 
       // 1. الرابط الذكي: يوجه الطلب داخلياً لو كنت على الويب، وخارجياً لو كنت على الموبايل
-      const apiUrl = typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
-        ? "/api/analyze" 
-        : "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
+     // 1. الرابط الذكي: قمنا بتثبيت الرابط الأساسي لضمان أن الواجهة تجد السيرفر دائماً
+const apiUrl = "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
 
       // 2. إرسال الطلب (تأكدنا من إرفاق النوع الصحيح للبيانات)
       const response = await fetch(apiUrl, {
@@ -1072,7 +1071,7 @@ export default function InventoryScannerPage() {
 
       // 3. التحقق الفوري من حالة المسار (لحل مشكلة الـ 404)
       if (response.status === 404) {
-        throw new Error("فشل الاتصال (404): المسار غير موجود على هذا السيرفر. تأكد من رفع ملف route.ts داخل مجلد app/api/analyze/");
+        throw new Error("فشل الاتصال (404) حقا : المسار غير موجود على هذا السيرفر. تأكد من رفع ملف route.ts داخل مجلد app/api/analyze/");
       }
 
       const contentType = response.headers.get("content-type") ?? "";
