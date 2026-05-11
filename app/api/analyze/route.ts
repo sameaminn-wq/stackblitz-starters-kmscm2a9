@@ -10,7 +10,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from 'sharp'; // أضف: npm install sharp
 import type { ProductItem, Confidence } from "../../../types"; 
 // تذكر: 3 مرات ../ لكي تخرج من (analyze ثم api ثم app) وتصل للجذر
-
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
 // ──────────────────────────────────────────────────────────────
 // 1. CONFIGURATION
 // ──────────────────────────────────────────────────────────────
@@ -803,6 +807,15 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 }
 
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+// OPTIONS HANDLER (مطلوب للموبايل - Preflight CORS)
+// ──────────────────────────────────────────────────────────────
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  });
+}
 // 17. POST HANDLER (الدالة الرئيسية)
 // ──────────────────────────────────────────────────────────────
 
@@ -1047,8 +1060,10 @@ export async function POST(request: NextRequest) {
     },
   };
 
-  return NextResponse.json(response);
-}
+  return NextResponse.json(response, {
+    status: 200,
+    headers: CORS_HEADERS,
+  });}
 
 // ──────────────────────────────────────────────────────────────
 // 18. GET HANDLER

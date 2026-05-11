@@ -1054,28 +1054,28 @@ export default function InventoryScannerPage() {
 
     try {
       const response = await fetch("https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageData }),
-      });
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ image: imageData }),
+});
 
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON response from server:", rawText.substring(0, 300));
-        throw new Error(
-          `الخادم أرجع استجابة غير متوقعة (${res.status} ${res.statusText}). تحقق من السيرفر.`
-        );
-      }
+const contentType = response.headers.get("content-type") ?? "";
+if (!contentType.includes("application/json")) {
+  const rawText = await response.text();
+  console.error("Non-JSON response from server:", rawText.substring(0, 300));
+  throw new Error(
+    `الخادم أرجع استجابة غير متوقعة (${response.status} ${response.statusText}). تحقق من السيرفر.`
+  );
+}
 
-      let data: AnalysisResult;
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
-      }
+let data: AnalysisResult;
+try {
+  data = await response.json();
+} catch {
+  throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+}
 
-      if (!res.ok || !data.success) {
+if (!response.ok || !data.success) {
         const serverError = (data as { error?: string; detail?: string }).error
           ?? (data as { detail?: string }).detail
           ?? `خطأ ${res.status}: فشل التحليل`;
