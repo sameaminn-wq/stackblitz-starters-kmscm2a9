@@ -2,7 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
-import { ProductItem, ExportRequest, Confidence } from "./types";
+
+// إذا كان ملف types.ts في مجلد app الرئيسي، استخدم 3 نقاط للخروج:
+import { ProductItem, ExportRequest, Confidence } from "../../../types";
 
 // ============================================================
 // وظائف مساعدة لتوليد التقارير (Helper Functions for Report Generation)
@@ -36,109 +38,106 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
   // لاستخدام الخطوط العربية بشكل صحيح، ستحتاج إلى تضمين خط يدعم اللغة العربية (مثل NotoSansArabic-Regular.ttf)
   // وتحويل النص إلى أشكال (glyphs) قبل الرسم. هذا يتطلب تعقيداً إضافياً.
   // حالياً، سيتم استخدام خطوط لاتينية قياسية، وقد تظهر الحروف العربية بشكل منفصل أو غير صحيح.
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  // 1. تعريف الخطوط والإعدادات الأساسية
+const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-  const page = pdfDoc.addPage();
+let page = pdfDoc.addPage();
+const { width, height } = page.getSize();
+const margin = 50;
+let y = height - margin;
 
-  const { width, height } = page.getSize();
-  let y = height - 50;
-  const margin = 50;
-  const fontSize = 12;
-  const headerFontSize = 18;
+const fontSize = 10; // تقليل الخط قليلاً ليعطي مظهراً أرشق
+const headerFontSize = 18;
 
-  // عنوان التقرير
-  page.drawText(exportDetails.invoiceTitle || "تقرير جرد المخزون", {
-    x: margin,
-    y: y,
-    font: font,
-    size: headerFontSize,
-    color: rgb(0, 0.53, 0.71), // أزرق داكن
-  });
-  y -= 30;
+// 2. مصفوفة العناوين والعروض (دقة بكسل)
+const tableHeaders = ["#", "المنتج", "الماركة", "التصنيف", "الكمية", "السعر", "الإجمالي", "الباركود", "ملاحظات"];
+const columnWidths = [25, 110, 70, 70, 40, 60, 60, 80, 80];
 
-  // تفاصيل إضافية
-  if (exportDetails.invoiceNumber) {
-    page.drawText(`رقم الفاتورة: ${exportDetails.invoiceNumber}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
+// ──────────────────────────────────────────────────────────────
+// وظيفة مساعدة لرسم "رأس الجدول" (تمنع التكرار)
+// ──────────────────────────────────────────────────────────────
+const drawHeader = (currentPage: any, currentY: number) => {
+  let xPos = margin;
+  for (let j = 0; j < tableHeaders.length; j++) {
+    currentPage.drawText(tableHeaders[j], { x: xPos, y: currentY, font: font, size: fontSize });
+    xPos += columnWidths[j];
   }
-  if (exportDetails.customerName) {
-    page.drawText(`العميل: ${exportDetails.customerName}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
-  }
-  page.drawText(`التاريخ: ${new Date().toLocaleDateString()}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-  y -= 40;
+  const lineY = currentY - 5;
+  currentPage.drawLine({ start: { x: margin, y: lineY }, end: { x: width - margin, y: lineY }, thickness: 1 });
+  return lineY - 15; // إرجاع الموقع الجديد لـ y
+};
 
-  // رأس الجدول
-  const tableHeaders = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  const columnWidths = [30, 120, 80, 80, 50, 70, 70, 80, 50, 100];
-  let x = margin;
+// 3. رسم عنوان التقرير والتفاصيل العلوية
+page.drawText(exportDetails.invoiceTitle || "تقرير جرد المخزون", {
+  x: margin, y: y, font: font, size: headerFontSize, color: rgb(0, 0.53, 0.71)
+});
+y -= 25;
 
-  for (let i = 0; i < tableHeaders.length; i++) {
-    page.drawText(tableHeaders[i], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
-    x += columnWidths[i];
-  }
-  y -= 15;
-  page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
-  y -= 10;
+page.drawText(`التاريخ: ${new Date().toLocaleDateString()} | رقم: ${exportDetails.invoiceNumber || "N/A"}`, {
+  x: margin, y: y, font: fallbackFont, size: fontSize - 1, color: rgb(0.3, 0.3, 0.3)
+});
+y -= 35;
 
-  // بيانات المنتجات
-  let totalAmount = 0;
-  for (let i = 0; i < products.length; i++) {
-    const product = products[i];
-    const price = product.unit_price || 0;
-    const qty = product.quantity || 0;
-    const total = price * qty;
-    totalAmount += total;
+// رسم أول رأس جدول
+y = drawHeader(page, y);
 
-    x = margin;
-    page.drawText((i + 1).toString(), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[0];
-    page.drawText(product.product_name || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[1];
-    page.drawText(product.brand || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[2];
-    page.drawText(product.category || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[3];
-    page.drawText(qty.toString(), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[4];
-    page.drawText(price.toFixed(2), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[5];
-    page.drawText(total.toFixed(2), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[6];
-    page.drawText(product.barcode_serial || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[7];
-    page.drawText(product.confidence || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[8];
-    page.drawText(product.notes || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
+// 4. حلقة رسم المنتجات مع معالجة النصوص الطويلة
+let totalAmount = 0;
+for (let i = 0; i < products.length; i++) {
+  const product = products[i];
+  const price = Number(product.unit_price) || 0;
+  const qty = Number(product.quantity) || 0;
+  const total = price * qty;
+  totalAmount += total;
 
-    if (y < margin) {
-      page.addPage();
-      y = height - margin;
-      // إعادة رسم رأس الجدول للصفحة الجديدة
-      x = margin;
-      for (let j = 0; j < tableHeaders.length; j++) {
-        page.drawText(tableHeaders[j], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
-        x += columnWidths[j];
-      }
-      y -= 15;
-      page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
-      y -= 10;
-    }
+  // التحقق من المساحة (Pagination)
+  if (y < margin + 20) {
+    page = pdfDoc.addPage();
+    y = height - margin;
+    y = drawHeader(page, y);
   }
 
-  // الإجمالي الكلي
-  y -= 20;
-  page.drawText(`الإجمالي الكلي: ${totalAmount.toFixed(2)} ${exportDetails.currency || "USD"}`, {
-    x: width - margin - 150,
-    y: y,
-    font: font,
-    size: fontSize + 2,
-    color: rgb(0, 0, 0),
-  });
+  let xPos = margin;
+  const rowData = [
+    (i + 1).toString(),
+    String(product.product_name || "").substring(0, 25), // قص النص الطويل
+    String(product.brand || "").substring(0, 15),
+    String(product.category || "").substring(0, 15),
+    qty.toString(),
+    price.toFixed(2),
+    total.toFixed(2),
+// السطر 110 القديم: String(product.barcode || "").substring(0, 12),
 
-  return Buffer.from(await pdfDoc.save());
+// السطر الجديد (التصحيح):
+String(product.barcode_serial || "").substring(0, 12),
+    String(product.notes || "").substring(0, 20)
+  ];
+
+  // رسم الصف الحالي بآلية ديناميكية
+  for (let j = 0; j < rowData.length; j++) {
+    page.drawText(rowData[j], { x: xPos, y: y, font: fallbackFont, size: fontSize - 1 });
+    xPos += columnWidths[j];
+  }
+  y -= 18; // المسافة بين الصفوف
+}
+
+// 5. قسم الإجمالي النهائي (مع حماية الصفحة)
+if (y < margin + 50) {
+  page = pdfDoc.addPage();
+  y = height - margin;
+}
+
+y -= 20;
+page.drawLine({ start: { x: width - 200, y: y + 10 }, end: { x: width - margin, y: y + 10 }, thickness: 1.5 });
+page.drawText(`الإجمالي الكلي: ${totalAmount.toFixed(2)} ${exportDetails.currency || "EGP"}`, {
+  x: width - margin - 180,
+  y: y - 5,
+  font: font,
+  size: fontSize + 2,
+});
+
+return Buffer.from(await pdfDoc.save());
 }
 
 /**
@@ -168,15 +167,26 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   worksheet.addRow([`التاريخ: ${new Date().toLocaleDateString()}`]);
   worksheet.addRow([]); // صف فارغ
 
-  // رأس الجدول
-  const headers = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  worksheet.addRow(headers);
-  worksheet.getRow(worksheet.lastRow.number).font = { name: "Arial", size: 12, bold: true };
-  worksheet.getRow(worksheet.lastRow.number).eachCell((cell) => {
-    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD3D3D3" } }; // رمادي فاتح
-    cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
-  });
+  // 1. إضافة صف الرأس وتخزينه في متغير
+const headerRow = worksheet.addRow(["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"]);
 
+// 2. التنسيق المباشر والآمن (إرضاء TypeScript)
+headerRow.font = { name: "Arial", size: 12, bold: true };
+
+headerRow.eachCell((cell) => {
+  cell.fill = { 
+    type: "pattern", 
+    pattern: "solid", 
+    fgColor: { argb: "FFD3D3D3" } // رمادي فاتح احترافي
+  };
+  cell.border = { 
+    top: { style: "thin" }, 
+    left: { style: "thin" }, 
+    bottom: { style: "thin" }, 
+    right: { style: "thin" } 
+  };
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }; // لمسة احترافية إضافية
+});
   // بيانات المنتجات
   let totalAmount = 0;
   products.forEach((product, index) => {
@@ -209,16 +219,20 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   totalRow.getCell(6).alignment = { horizontal: "right" };
 
   // ضبط عرض الأعمدة
-  worksheet.columns.forEach(column => {
-    let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, cell => {
-      const columnLength = cell.value ? cell.value.toString().length : 10;
-      if (columnLength > maxLength) {
-        maxLength = columnLength;
-      }
-    });
-    column.width = maxLength < 10 ? 10 : maxLength + 2;
+ // ضبط عرض الأعمدة تلقائياً (Auto-fit columns)
+ worksheet.columns?.forEach(column => {
+  if (!column) return; // تأمين إضافي: إذا كان العمود غير موجود تخطاه
+
+  let maxLength = 0;
+  // إضافة علامة الاستقهام قبل النقاط لضمان عدم استدعاء دالة على undefined
+  column.eachCell?.({ includeEmpty: true }, (cell) => {
+    const columnLength = cell.value ? String(cell.value).length : 10;
+    if (columnLength > maxLength) {
+      maxLength = columnLength;
+    }
   });
+  column.width = maxLength < 12 ? 12 : maxLength + 2;
+});
 
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
