@@ -1,4 +1,5 @@
-
+// تأكد من استيراد StandardFonts بشكل صحيح في الأعلى
+import { StandardFonts } from "pdf-lib";
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
