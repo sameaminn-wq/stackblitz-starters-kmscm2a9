@@ -4,10 +4,10 @@
 // ║  Gemini 2.5 Flash · All Image Formats · Arabic-first         ║
 // ║  Supports: JPEG, PNG, WebP, GIF, BMP, TIFF, HEIC, AVIF       ║
 // ╚══════════════════════════════════════════════════════════════╝
-
+export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import sharp from 'sharp'; // أضف: npm install sharp
+
 import type { ProductItem, Confidence } from "../../../types"; 
 // تذكر: 3 مرات ../ لكي تخرج من (analyze ثم api ثم app) وتصل للجذر
 
@@ -33,7 +33,7 @@ const ALLOWED_MIME_TYPES = new Set([
 const FORMATS_NEEDING_CONVERSION = new Set([
   "image/heic", "image/heif", "image/bmp", "image/tiff", "image/avif"
 ]);
-
+const sharp = (await import('sharp')).default;
 const MAX_RETRIES          = 4;
 const BASE_RETRY_DELAY_MS  = 3000;
 const BATCH_PRICE_THRESHOLD = 6;
