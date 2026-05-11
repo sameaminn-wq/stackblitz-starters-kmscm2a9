@@ -2,7 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
-import { ProductItem, ExportRequest, Confidence } from "./types";
+
+// إذا كان ملف types.ts في مجلد app الرئيسي، استخدم 3 نقاط للخروج:
+import { ProductItem, ExportRequest, Confidence } from "../../../types";
 
 // ============================================================
 // وظائف مساعدة لتوليد التقارير (Helper Functions for Report Generation)
