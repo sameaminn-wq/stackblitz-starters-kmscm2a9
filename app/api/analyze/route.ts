@@ -1187,7 +1187,7 @@ export async function POST(request: NextRequest) {
   } catch (convError) {
     console.error("[IMAGE] Conversion failed:", convError);
     return NextResponse.json(
-      { success: false, error: "نوع الصورة غير مدعوم أو الملف تالف." },
+      { success: false, error: "نوع الصورة غير مدعوم +++ أو الملف تالف." },
       { 
         status: 200, 
         headers: CORS_HEADERS // هذا هو الإضافة السحرية التي تمنع الانهيار
