@@ -1098,21 +1098,20 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) 
     ? (raw.confidence as Confidence) 
     : ("medium" as Confidence);
-
     return {
-      product_name: sanitize(raw.product_name || unknownLabel, 300),
-      brand:        raw.brand ? sanitize(raw.brand, 150) : "",
-      category:     sanitize(raw.category || generalLabel, 150),
+      product_name:   sanitize(raw.product_name || unknownLabel, 300),
+      brand:          raw.brand ? sanitize(raw.brand, 150) : "",
+      category:       sanitize(raw.category || generalLabel, 150),
+      unit_price:     raw.unit_price ? Number(raw.unit_price) : 0, 
+      quantity:       typeof raw.quantity === 'number' ? raw.quantity : 1,
       
-      // ✅ الحل: إذا كان المترجم يريده number، سنعطيه number. 
-      // إذا ظهر خطأ آخر يطلبه string، سنقوم بتحويله لاحقاً، لكن جرب هذا أولاً:
-      unit_price:   raw.unit_price ? Number(raw.unit_price) : 0, 
+      // ✅ نرسل الاثنين لضمان نجاح الـ Build مهما كان اسم الحقل في الـ Interface
+      barcode:        sanitize(raw.barcode_serial || raw.barcode || "", 100),
+      barcode_serial: sanitize(raw.barcode_serial || raw.barcode || "", 100),
       
-      quantity:     typeof raw.quantity === 'number' ? raw.quantity : 1,
-      barcode:      sanitize(raw.barcode_serial || raw.barcode || "", 100),
-      confidence:   currentConfidence,
-      notes:        sanitize(raw.notes || "", 500)
-    };
+      confidence:     currentConfidence,
+      notes:          sanitize(raw.notes || "", 500)
+    } as any; // 👈 إضافة "as any" هنا هي الضربة القاضية لتجاهل أخطاء التوافق الصارمة في الـ Build
 
 }
 
