@@ -1096,31 +1096,23 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
 
-  const confidence: Confidence =
-    ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
+  // 1. تحديد مستوى الدقة بشكل آمن
+  const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) 
+    ? (raw.confidence as Confidence) 
+    : ("medium" as Confidence);
 
-    // تأكد أنك تستخرج القيمة الصحيحة من raw أولاً
-  const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
-
+  // 2. إرجاع البيانات المطابقة تماماً لما يتوقعه ملف page.tsx (بدون زيادة أو نقصان)
   return {
-    product_name:     sanitize(raw.product_name || unknownLabel, 300),
-    brand:            raw.brand ? sanitize(raw.brand, 150) : null,
-    category:         sanitize(raw.category || generalLabel, 150),
-    unit_price:       null,
-    quantity:         typeof raw.quantity === 'number' ? raw.quantity : 1,
-    barcode:          raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null, 
-    // ✅ استخدم المتغير الذي عرفناه بالأعلى (currentConfidence)
-    confidence:       currentConfidence as Confidence,
-    notes:            sanitize(raw.notes || "", 500),
-    
-    id:               `prod_${Math.random().toString(36).substr(2, 9)}`,
-    fallback_level:   0,
-    detection_method: "vision_ai",
-    // ✅ استخدم المتخدم المتغير هنا أيضاً للحساب
-    confidence_score: currentConfidence === "high" ? 0.95 : (currentConfidence === "medium" ? 0.75 : 0.45),
-    price_status:     "estimated",
-    last_updated:     new Date().toISOString(),
-    is_verified:      false
+    product_name: sanitize(raw.product_name || unknownLabel, 300),
+    brand:        raw.brand ? sanitize(raw.brand, 150) : "",
+    category:     sanitize(raw.category || generalLabel, 150),
+    // تحويل السعر لنص كما هو محدد في الواجهة ProductItem
+    unit_price:   raw.unit_price ? String(raw.unit_price) : "0.00",
+    quantity:     typeof raw.quantity === 'number' ? raw.quantity : 1,
+    // توحيد المسمى ليكون barcode ليطابق تعريف الواجهة في page.tsx
+    barcode:      sanitize(raw.barcode_serial || raw.barcode || "", 100),
+    confidence:   currentConfidence,
+    notes:        sanitize(raw.notes || "", 500)
   };
 }
 
