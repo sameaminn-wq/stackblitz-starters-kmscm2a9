@@ -246,7 +246,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: any = null;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -426,13 +426,13 @@ function extractJSON<T>(raw: string): T {
       .replace(/,\s*]/g, ']')
       .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
     
-    try {
-      return JSON.parse(fixed);
-    } catch (secondError) {
-      console.error("[JSON] Failed to parse:", text.substring(0, 200));
-      throw new Error(`Invalid JSON format: ${firstError.message}`);
-    }
-  }
+      try {
+        return JSON.parse(fixed);
+      } catch (secondError) {
+        console.error("[JSON] Failed to parse:", text.substring(0, 200));
+        // التعديل هنا: نستخدم string لضمان قبول أي نوع من الأخطاء
+        throw new Error(`Invalid JSON format: ${String(firstError)}`);
+      }}
 }
 
 // ──────────────────────────────────────────────────────────────
