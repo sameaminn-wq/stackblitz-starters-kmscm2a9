@@ -1054,12 +1054,14 @@ export default function InventoryScannerPage() {
 
     try {
       const response = await fetch("https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ image: imageData }),
-});
+        method: "POST",
+        mode: "cors", // ⬅️ أضف هذا السطر لضمان العبور
+        // ❌ حذفنا سطر headers: { "Content-Type": "application/json" }
+        body: JSON.stringify({ image: imageData }),
+      });
 
-const contentType = response.headers.get("content-type") ?? "";
+      const contentType = response.headers.get("content-type") ?? "";
+      // ... باقي الكود الخاص بك ممتاز لا تغيره ...
 if (!contentType.includes("application/json")) {
   const rawText = await response.text();
   console.error("Non-JSON response from server:", rawText.substring(0, 300));
