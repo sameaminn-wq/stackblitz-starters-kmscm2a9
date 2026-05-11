@@ -694,7 +694,8 @@ Be strict: only return valid JSON, no other text.`;
 }
 
 // ──────────────────────────────────────────────────────────────
-// 14. MASTER PROMPT BUILDER
+/// ──────────────────────────────────────────────────────────────
+// 14. MASTER PROMPT BUILDER (FIXED & STABLE)
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
@@ -702,10 +703,15 @@ function buildMasterPrompt(ctx: GeoContext): string {
   const currency   = ctx.currency.code;
   const symbol     = ctx.currency.symbol;
   const country    = ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn;
-  // تعريف المتغيرات المفقودة لضمان نجاح الـ Build
-const batch_id = `batch_${Date.now()}`;
-const image_id = `img_${Math.random().toString(36).substr(2, 9)}`;
-const timestamp = new Date().toISOString();
+  
+  // 1. تعريف المتغيرات لضمان نجاح الـ Build
+  const batch_id = `batch_${Date.now()}`;
+  const image_id = `img_${Math.random().toString(36).substr(2, 9)}`;
+  const timestamp = new Date().toISOString();
+  
+  // 2. تعريف المتغيرات التي كانت تسبب خطأ 404 (نعطيها قيم افتراضية)
+  const previous_scan_context = "None (Initial Scan)";
+  const planogram_reference = "Standard Layout v1.0";
 
   return `أنت "محرك الجرد البصري الشامل فائق الدقة v5.0"
   Multimodal Enterprise Inventory Vision Engine — MEIVE-5
@@ -721,8 +727,8 @@ const timestamp = new Date().toISOString();
   🧩 إصدار المخطط: 5.0.0
   📋 سياق الجلسة السابقة: ${previous_scan_context}
   📐 خطة الرف المعتمدة: ${planogram_reference}
-  ═══════════════════════════════════════════════════════════════════
   
+
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   🧠 الهوية التشغيلية
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
