@@ -1099,18 +1099,26 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const confidence: Confidence =
     ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
 
-  return {
-    product_name:   sanitize(raw.product_name || unknownLabel, 300),
-    brand:          raw.brand ? sanitize(raw.brand, 150) : null,
-    category:       sanitize(raw.category || generalLabel, 150),
-    unit_price:     null,
-    quantity:       typeof raw.quantity === "number" && raw.quantity > 0
-                      ? Math.floor(raw.quantity)
-                      : 1,
-    barcode_serial: raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
-    confidence,
-    notes:          sanitize(raw.notes || "", 800),
-  };
+    return {
+      product_name:     sanitize(raw.product_name || unknownLabel, 300),
+      brand:            raw.brand ? sanitize(raw.brand, 150) : null,
+      category:         sanitize(raw.category || generalLabel, 150),
+      unit_price:       null,
+      quantity:         typeof raw.quantity === 'number' ? raw.quantity : 1,
+      // ✅ قم بتغيير الاسم من barcode_serial إلى barcode فقط
+      barcode:          raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null, 
+      confidence:       validConfidence,
+      notes:            sanitize(raw.notes || "", 500),
+      
+      // الحقول الإضافية التي أصلحناها للـ Build سابقاً
+      id:               `prod_${Math.random().toString(36).substr(2, 9)}`,
+      fallback_level:   0,
+      detection_method: "vision_ai",
+      confidence_score: validConfidence === "high" ? 0.95 : (validConfidence === "medium" ? 0.75 : 0.45),
+      price_status:     "estimated",
+      last_updated:     new Date().toISOString(),
+      is_verified:      false
+    };
 }
 
 // ──────────────────────────────────────────────────────────────
