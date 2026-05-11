@@ -1074,7 +1074,7 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 }
 
 // ──────────────────────────────────────────────────────────────
-// 16. PRODUCT SANITIZER
+// 16. PRODUCT SANITIZER we went to see last oone 
 // ──────────────────────────────────────────────────────────────
 
 function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
