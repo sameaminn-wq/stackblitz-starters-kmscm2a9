@@ -1053,34 +1053,43 @@ export default function InventoryScannerPage() {
     setExportSuccess(false);
 
     try {
-      const response = await fetch("https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze", {
+      setLoading(true); // تأكد من تفعيل حالة التحميل
+      setError(null);
+
+      // 1. تعريف الرابط الذكي (حل مشكلة الـ 404 والـ Preview)
+      const apiUrl = typeof window !== "undefined" && window.location.hostname.includes("vercel.app") 
+        ? "/api/analyze" 
+        : "https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze";
+
+      const response = await fetch(apiUrl, {
         method: "POST",
-        mode: "cors", // ⬅️ أضف هذا السطر لضمان العبور
-        // ❌ حذفنا سطر headers: { "Content-Type": "application/json" }
+        mode: "cors", 
+        // ❌ تم حذف سطر headers يدوياً للسماح للمتصفح بالتعامل مع الطلب ببساطة
         body: JSON.stringify({ image: imageData }),
       });
 
       const contentType = response.headers.get("content-type") ?? "";
-      // ... باقي الكود الخاص بك ممتاز لا تغيره ...
-if (!contentType.includes("application/json")) {
-  const rawText = await response.text();
-  console.error("Non-JSON response from server:", rawText.substring(0, 300));
-  throw new Error(
-    `الخادم أرجع استجابة غير متوقعة (${response.status} ${response.statusText}). تحقق من السيرفر.`
-  );
-}
+      
+      if (!contentType.includes("application/json")) {
+        const rawText = await response.text();
+        console.error("Non-JSON response from server:", rawText.substring(0, 300));
+        throw new Error(
+          `الخادم أرجع استجابة غير متوقعة (${response.status}). تحقق من اتصال الإنترنت.`
+        );
+      }
 
-let data: AnalysisResult;
-try {
-  data = await response.json();
-} catch {
-  throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
-}
+      let data: AnalysisResult;
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
+      }
 
-if (!response.ok || !data.success) {
-        const serverError = (data as { error?: string; detail?: string }).error
-          ?? (data as { detail?: string }).detail
-          ?? `خطأ ${res.status}: فشل التحليل`;
+      // 2. تصحيح اسم المتغير من res إلى response هنا
+      if (!response.ok || !data.success) {
+        const serverError = (data as any).error 
+          ?? (data as any).detail 
+          ?? `خطأ ${response.status}: فشل التحليل`; // تم التصحيح هنا
         throw new Error(serverError);
       }
 
@@ -1088,8 +1097,12 @@ if (!response.ok || !data.success) {
         throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
       }
 
+      // 3. تحديث الواجهة بالبيانات
       setResult(data);
+      // إذا كان لديك setItems(data.products) أضفها هنا أيضاً
+      
     } catch (err) {
+      console.error("Fetch Error:", err);
       setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
     } finally {
       setLoading(false);
