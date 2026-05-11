@@ -1053,7 +1053,7 @@ export default function InventoryScannerPage() {
     setExportSuccess(false);
 
     try {
-      const res = await fetch("/api/analyze", {
+      const response = await fetch("https://stackblitz-starters-kmscm2a9.vercel.app/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: imageData }),
