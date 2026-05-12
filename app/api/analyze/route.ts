@@ -698,6 +698,16 @@ function buildMasterPrompt(ctx: GeoContext): string {
   const symbol     = ctx.currency.symbol;
   const country    = ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn;
 
+  // ✅ تعريف المتغيرات داخل الدالة
+  const batch_id = `batch_${Date.now()}`;
+  const image_id = `img_${Math.random().toString(36).substr(2, 9)}`;
+  const timestamp = new Date().toISOString();
+  const previous_scan_context = "None (Initial Scan)";
+  const planogram_reference = "Standard Layout v1.0";
+
+  // ✅ استخدام backticks بشكل صحيح
+
+
   return `أنت "محرك الجرد البصري الشامل فائق الدقة v5.0"
   Multimodal Enterprise Inventory Vision Engine — MEIVE-5
   مستوى: Fortune 500 Retail & Logistics Operations
