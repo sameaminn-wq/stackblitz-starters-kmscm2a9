@@ -1,35 +1,72 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-// تأكد أيضاً من استيراد useEffect إذا كنت تستخدم isMounted
 
 // ============================================================
-// Types (متوافقة مع الـ API Route)
+// Types (متوافقة مع الـ API Route الفعلي)
 // ============================================================
 type Confidence = "high" | "medium" | "low";
-type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
+type AnalysisQuality = "excellent" | "good" | "fair" | "poor";
 
 interface ProductItem {
   product_name: string;
-  brand: string;
+  brand: string | null;
   category: string;
-  unit_price: string;
-  quantity: number | string;
+  unit_price: number | null;
+  quantity: number;
   barcode: string;
+  barcode_serial: string;
   confidence: Confidence;
   notes: string;
 }
 
 interface AnalysisResult {
   success: boolean;
-  products: ProductItem[];
-  total_products_detected: number;
+  editable: boolean;
+  business_type: string;
   analysis_quality: AnalysisQuality;
+  detected_items_count: number;
+  products: ProductItem[];
   warnings: string[];
+  suggestions: string[];
+  detected_location?: string;
+  timestamp?: string;
+  total_estimated_value: number;
+  total_estimated_value_formatted: string;
+  currency_info: {
+    code: string;
+    symbol: string;
+    name: string;
+    exchange_rate_to_usd: number;
+  };
+  image_quality_analysis?: {
+    has_barcodes: boolean;
+    has_qr_codes: boolean;
+    has_prices_on_shelves: boolean;
+    image_quality_score: number;
+    lighting_quality: string;
+    suggested_improvements: string[];
+  } | null;
+  _meta?: {
+    engine: string;
+    model: string;
+    duration_ms: number;
+    prices_fetched: boolean;
+    unique_products: number;
+    saved_api_calls: number;
+    country_detected: string;
+  };
+}
+
+interface Currency {
+  code: string;
+  symbol: string;
+  name: string;
+  flag: string;
 }
 
 // ============================================================
-// Sub-components
+// Sub-components (نفس الكود الأصلي مع تعديلات بسيطة)
 // ============================================================
 
 function ConfidenceBadge({ level }: { level: Confidence }) {
@@ -46,10 +83,10 @@ function QualityBar({ quality }: { quality: AnalysisQuality }) {
   const map: Record<AnalysisQuality, { label: string; width: string; color: string }> = {
     excellent: { label: "ممتاز", width: "100%", color: "#10b981" },
     good: { label: "جيد", width: "75%", color: "#3b82f6" },
-    partial: { label: "جزئي", width: "45%", color: "#f59e0b" },
-    failed: { label: "فشل", width: "10%", color: "#ef4444" },
+    fair: { label: "متوسط", width: "45%", color: "#f59e0b" },
+    poor: { label: "ضعيف", width: "20%", color: "#ef4444" },
   };
-  const { label, width, color } = map[quality] ?? map.good;
+  const { label, width, color } = map[quality] ?? map.fair;
   return (
     <div className="quality-bar-wrapper">
       <span className="quality-label">جودة التحليل: {label}</span>
@@ -79,11 +116,16 @@ function ProductCard({
 }: {
   item: ProductItem;
   index: number;
-  onChange: (idx: number, field: keyof ProductItem, value: string) => void;
+  onChange: (idx: number, field: keyof ProductItem, value: string | number) => void;
   onDelete: (idx: number) => void;
   currencySymbol: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+
+  const handleNumberChange = (field: "quantity" | "unit_price", value: string) => {
+    const numValue = value === "" ? (field === "quantity" ? 1 : null) : Number(value);
+    onChange(index, field, numValue);
+  };
 
   return (
     <div className="product-card">
@@ -124,26 +166,62 @@ function ProductCard({
       {expanded && (
         <div className="product-edit-section">
           <div className="edit-grid">
-            {(
-              [
-                { key: "product_name", label: "اسم المنتج" },
-                { key: "brand", label: "الماركة" },
-                { key: "category", label: "التصنيف" },
-                { key: "unit_price", label: "السعر" },
-                { key: "quantity", label: "الكمية" },
-                { key: "barcode", label: "الباركود" },
-              ] as { key: keyof ProductItem; label: string }[]
-            ).map(({ key, label }) => (
-              <div key={key} className="edit-field">
-                <label className="edit-label">{label}</label>
-                <input
-                  className="edit-input"
-                  value={String(item[key] ?? "")}
-                  onChange={(e) => onChange(index, key, e.target.value)}
-                  dir="rtl"
-                />
-              </div>
-            ))}
+            <div className="edit-field">
+              <label className="edit-label">اسم المنتج</label>
+              <input
+                className="edit-input"
+                value={item.product_name}
+                onChange={(e) => onChange(index, "product_name", e.target.value)}
+                dir="rtl"
+              />
+            </div>
+            <div className="edit-field">
+              <label className="edit-label">الماركة</label>
+              <input
+                className="edit-input"
+                value={item.brand || ""}
+                onChange={(e) => onChange(index, "brand", e.target.value)}
+                dir="rtl"
+              />
+            </div>
+            <div className="edit-field">
+              <label className="edit-label">التصنيف</label>
+              <input
+                className="edit-input"
+                value={item.category}
+                onChange={(e) => onChange(index, "category", e.target.value)}
+                dir="rtl"
+              />
+            </div>
+            <div className="edit-field">
+              <label className="edit-label">السعر ({currencySymbol})</label>
+              <input
+                type="number"
+                className="edit-input"
+                value={item.unit_price ?? ""}
+                onChange={(e) => handleNumberChange("unit_price", e.target.value)}
+                dir="ltr"
+              />
+            </div>
+            <div className="edit-field">
+              <label className="edit-label">الكمية</label>
+              <input
+                type="number"
+                className="edit-input"
+                value={item.quantity}
+                onChange={(e) => handleNumberChange("quantity", e.target.value)}
+                dir="ltr"
+              />
+            </div>
+            <div className="edit-field">
+              <label className="edit-label">الباركود</label>
+              <input
+                className="edit-input"
+                value={item.barcode}
+                onChange={(e) => onChange(index, "barcode", e.target.value)}
+                dir="ltr"
+              />
+            </div>
           </div>
           {item.notes && (
             <div className="notes-row">
@@ -161,7 +239,7 @@ function ProductCard({
 }
 
 // ============================================================
-// Camera / Upload Component
+// Camera / Upload Component (نفس الكود الأصلي)
 // ============================================================
 function ImageCapture({ onCapture, disabled }: { onCapture: (img: string) => void; disabled: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -200,7 +278,7 @@ function ImageCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
 }
 
 // ============================================================
-// Video Capture Component
+// Video Capture Component (نفس الكود الأصلي)
 // ============================================================
 const LIGHTING_MODES = [
   { id: "auto",   label: "تلقائي",       icon: "✨", filter: "none",                                                              desc: "للإضاءة الطبيعية المعتدلة" },
@@ -609,15 +687,8 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
 }
 
 // ============================================================
-// نظام العملات
+// نظام العملات (نفس الكود الأصلي)
 // ============================================================
-interface Currency {
-  code: string;
-  symbol: string;
-  name: string;
-  flag: string;
-}
-
 const CURRENCIES: Currency[] = [
   { code: "EGP", symbol: "ج.م", name: "جنيه مصري",       flag: "🇪🇬" },
   { code: "SAR", symbol: "ر.س", name: "ريال سعودي",      flag: "🇸🇦" },
@@ -642,7 +713,7 @@ const CURRENCIES: Currency[] = [
 ];
 
 // ============================================================
-// نظام الفواتير
+// نظام الفواتير (نفس الكود الأصلي مع تعديل بسيط)
 // ============================================================
 interface InvoiceInfo {
   clientName: string;
@@ -667,8 +738,8 @@ function generateInvoiceHTML(
   const invNum  = info.invoiceNumber || `INV-${Date.now().toString().slice(-6)}`;
 
   const subtotal = products.reduce((sum, p) => {
-    const price = parseFloat(String(p.unit_price).replace(/[^\d.]/g, "")) || 0;
-    const qty   = Number(p.quantity) || 0;
+    const price = p.unit_price || 0;
+    const qty   = p.quantity || 0;
     return sum + price * qty;
   }, 0);
 
@@ -680,8 +751,8 @@ function generateInvoiceHTML(
     n.toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const rows = products.map((p, i) => {
-    const price = parseFloat(String(p.unit_price).replace(/[^\d.]/g, "")) || 0;
-    const qty   = Number(p.quantity) || 0;
+    const price = p.unit_price || 0;
+    const qty   = p.quantity || 0;
     const totalP = price * qty;
     return `
       <tr style="border-bottom:1px solid #e2e8f0;${i % 2 === 1 ? "background:#f8fafc;" : ""}">
@@ -817,7 +888,7 @@ function generateInvoiceHTML(
 }
 
 // ============================================================
-// Invoice Modal Component
+// Invoice Modal Component (نفس الكود الأصلي)
 // ============================================================
 function InvoiceModal({
   products,
@@ -1019,7 +1090,7 @@ function InvoiceModal({
 }
 
 // ============================================================
-// Main Component - هذه هي الصفحة الرئيسية
+// Main Component
 // ============================================================
 export default function InventoryScannerPage() {
   const [isMounted, setIsMounted] = useState(false);
@@ -1056,50 +1127,73 @@ export default function InventoryScannerPage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageData }),
+        body: JSON.stringify({ image: imageData, fetch_prices: true }),
       });
 
       const contentType = res.headers.get("content-type") ?? "";
       if (!contentType.includes("application/json")) {
         const rawText = await res.text();
         console.error("Non-JSON response from server:", rawText.substring(0, 300));
-        throw new Error(
-          `الخادم أرجع استجابة غير متوقعة (${res.status} ${res.statusText}). تحقق من السيرفر.`
-        );
+        throw new Error(`الخادم أرجع استجابة غير متوقعة (${res.status} ${res.statusText})`);
       }
 
-      let data: AnalysisResult;
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد الخادم - الرد ليس JSON صالحاً");
-      }
+      const data = await res.json();
 
       if (!res.ok || !data.success) {
-        const serverError = (data as { error?: string; detail?: string }).error
-          ?? (data as { detail?: string }).detail
-          ?? `خطأ ${res.status}: فشل التحليل`;
+        const serverError = data.error || data.detail || `خطأ ${res.status}: فشل التحليل`;
         throw new Error(serverError);
       }
 
-      if (!Array.isArray(data.products)) {
-        throw new Error("رد الخادم لا يحتوي على قائمة منتجات صحيحة");
-      }
+      // تحويل البيانات من API إلى الشكل المطلوب
+      const products: ProductItem[] = (data.products || []).map((p: any, idx: number) => ({
+        product_name: p.product_name || "منتج غير معروف",
+        brand: p.brand || null,
+        category: p.category || "عام",
+        unit_price: typeof p.unit_price === "number" ? p.unit_price : null,
+        quantity: typeof p.quantity === "number" ? p.quantity : 1,
+        barcode: p.barcode || p.barcode_serial || "",
+        barcode_serial: p.barcode_serial || p.barcode || "",
+        confidence: (p.confidence === "high" || p.confidence === "medium" || p.confidence === "low") ? p.confidence : "medium",
+        notes: p.notes || "",
+      }));
 
-      setResult(data);
+      const analysisResult: AnalysisResult = {
+        success: true,
+        editable: data.editable ?? true,
+        business_type: data.business_type || "مخزون عام",
+        analysis_quality: (data.analysis_quality === "excellent" || data.analysis_quality === "good" || data.analysis_quality === "fair") ? data.analysis_quality : "fair",
+        detected_items_count: products.length,
+        products,
+        warnings: data.warnings || [],
+        suggestions: data.suggestions || [],
+        detected_location: data.detected_location || "مصر",
+        timestamp: data.timestamp || new Date().toISOString(),
+        total_estimated_value: data.total_estimated_value || 0,
+        total_estimated_value_formatted: data.total_estimated_value_formatted || "0",
+        currency_info: data.currency_info || {
+          code: currency.code,
+          symbol: currency.symbol,
+          name: currency.name,
+          exchange_rate_to_usd: 1,
+        },
+        image_quality_analysis: data.image_quality_analysis || null,
+        _meta: data._meta,
+      };
+
+      setResult(analysisResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بالخادم");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currency]);
 
-  const handleFieldChange = useCallback((idx: number, field: keyof ProductItem, value: string) => {
+  const handleFieldChange = useCallback((idx: number, field: keyof ProductItem, value: string | number) => {
     setResult((prev) => {
       if (!prev) return prev;
       const updated = [...prev.products];
       updated[idx] = { ...updated[idx], [field]: value };
-      return { ...prev, products: updated, total_products_detected: updated.length };
+      return { ...prev, products: updated, detected_items_count: updated.length };
     });
   }, []);
 
@@ -1107,7 +1201,7 @@ export default function InventoryScannerPage() {
     setResult((prev) => {
       if (!prev) return prev;
       const updated = prev.products.filter((_, i) => i !== idx);
-      return { ...prev, products: updated, total_products_detected: updated.length };
+      return { ...prev, products: updated, detected_items_count: updated.length };
     });
   }, []);
 
@@ -1137,18 +1231,13 @@ export default function InventoryScannerPage() {
       if (!contentType.includes("application/json")) {
         const rawText = await res.text();
         console.error("Non-JSON from /api/sheets:", rawText.substring(0, 300));
-        throw new Error(`خطأ من الخادم (${res.status}). تحقق من إعداد Google Sheets API.`);
+        throw new Error(`خطأ من الخادم (${res.status})`);
       }
 
-      let data: { success: boolean; error?: string; detail?: string };
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد خادم الجداول");
-      }
+      const data = await res.json();
 
       if (!res.ok || !data.success) {
-        throw new Error(data.error ?? data.detail ?? `فشل التصدير (${res.status})`);
+        throw new Error(data.error || data.detail || `فشل التصدير (${res.status})`);
       }
 
       setExportSuccess(true);
@@ -1171,11 +1260,12 @@ export default function InventoryScannerPage() {
   const handleAddProduct = useCallback(() => {
     const newItem: ProductItem = {
       product_name: "منتج جديد",
-      brand: "",
-      category: "",
-      unit_price: "",
+      brand: null,
+      category: "عام",
+      unit_price: null,
       quantity: 1,
       barcode: "",
+      barcode_serial: "",
       confidence: "high",
       notes: "تمت الإضافة يدوياً",
     };
@@ -1183,13 +1273,28 @@ export default function InventoryScannerPage() {
       const existing = prev?.products ?? [];
       return {
         success: true,
-        products: [newItem, ...existing],
-        total_products_detected: existing.length + 1,
+        editable: true,
+        business_type: prev?.business_type ?? "مخزون عام",
         analysis_quality: prev?.analysis_quality ?? "good",
+        detected_items_count: existing.length + 1,
+        products: [newItem, ...existing],
         warnings: prev?.warnings ?? [],
+        suggestions: prev?.suggestions ?? [],
+        detected_location: prev?.detected_location ?? "مصر",
+        timestamp: new Date().toISOString(),
+        total_estimated_value: prev?.total_estimated_value ?? 0,
+        total_estimated_value_formatted: prev?.total_estimated_value_formatted ?? "0",
+        currency_info: prev?.currency_info ?? {
+          code: currency.code,
+          symbol: currency.symbol,
+          name: currency.name,
+          exchange_rate_to_usd: 1,
+        },
+        image_quality_analysis: prev?.image_quality_analysis ?? null,
+        _meta: prev?._meta,
       };
     });
-  }, []);
+  }, [currency]);
 
   const handleReset = () => {
     const hasUnsaved = result && result.products.length > 0 && !exportSuccess;
@@ -1257,7 +1362,7 @@ export default function InventoryScannerPage() {
         .stat-icon { font-size: 1.3rem; }
         .stat-value { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; line-height: 1; }
         .stat-label { font-size: 0.65rem; color: #64748b; }
-        .quality-bar-wrapper { background: rgba(15,22,44,0.5); border: 1px solid rgba(99,157,255,0.1); border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 1rem; }
+        .quality-bar-wrapper { background: rgba(15,22,44,0.5); border: 1px solid rgba(99,157,255,0.1); border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
         .quality-label { font-size: 0.78rem; color: #64748b; white-space: nowrap; flex-shrink: 0; }
         .quality-track { flex: 1; height: 6px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
         .quality-fill { height: 100%; border-radius: 3px; transition: width 0.6s ease; }
@@ -1265,9 +1370,8 @@ export default function InventoryScannerPage() {
         .warnings-title { font-size: 0.75rem; font-weight: 600; color: #fbbf24; margin-bottom: 0.3rem; }
         .warnings-list { list-style: none; padding: 0; }
         .warnings-list li { font-size: 0.75rem; color: #d97706; padding: 2px 0; }
-        .section-title { font-size: 0.8rem; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem; }
-        .section-title > span { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
-        .section-title > span::after { content: ''; flex: 1; height: 1px; background: rgba(99,157,255,0.1); min-width: 1rem; }
+        .section-title { font-size: 0.8rem; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; }
+        .section-title span { display: flex; align-items: center; gap: 0.5rem; }
         .products-list { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; }
         .product-card { background: rgba(15,22,44,0.6); border: 1px solid rgba(99,157,255,0.12); border-radius: 16px; overflow: hidden; transition: border-color 0.2s; }
         .product-card:hover { border-color: rgba(99,157,255,0.25); }
@@ -1296,6 +1400,7 @@ export default function InventoryScannerPage() {
         .edit-label { font-size: 0.68rem; color: #475569; font-weight: 500; }
         .edit-input { background: rgba(15,22,44,0.8); border: 1px solid rgba(99,157,255,0.15); border-radius: 8px; padding: 0.45rem 0.6rem; color: #e2e8f0; font-size: 0.82rem; font-family: inherit; text-align: right; outline: none; transition: border-color 0.15s; }
         .edit-input:focus { border-color: rgba(59,130,246,0.45); }
+        .edit-input[type="number"] { text-align: left; }
         .notes-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.5rem 0.75rem; background: rgba(59,130,246,0.06); border-radius: 8px; margin-bottom: 0.6rem; }
         .notes-icon { color: #60a5fa; font-size: 0.9rem; flex-shrink: 0; }
         .notes-text { font-size: 0.75rem; color: #64748b; line-height: 1.5; }
@@ -1307,6 +1412,9 @@ export default function InventoryScannerPage() {
         .export-success-text { font-size: 0.9rem; font-weight: 600; color: #34d399; }
         .export-success-sub { font-size: 0.75rem; color: #475569; margin-top: 0.25rem; }
         .divider { height: 1px; background: rgba(99,157,255,0.08); margin: 1.25rem 0; }
+        .total-value { background: linear-gradient(135deg, rgba(16,185,129,0.1), rgba(16,185,129,0.05)); border: 1px solid rgba(16,185,129,0.2); border-radius: 14px; padding: 0.75rem 1rem; margin-bottom: 1rem; text-align: center; }
+        .total-value-label { font-size: 0.7rem; color: #475569; letter-spacing: 0.05em; }
+        .total-value-amount { font-size: 1.6rem; font-weight: 800; color: #34d399; }
         .settings-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 1rem; }
         .settings-modal { background: #0f1628; border: 1px solid rgba(99,157,255,0.2); border-radius: 20px; padding: 1.5rem; width: 100%; max-width: 420px; }
         .settings-title { font-size: 1rem; font-weight: 700; color: #f1f5f9; margin-bottom: 0.35rem; }
@@ -1416,12 +1524,13 @@ export default function InventoryScannerPage() {
             <div className="image-preview">
               <img src={previewImg} alt="صورة الرف" />
               <div className="image-preview-overlay">
-                {loading ? "جاري تحليل الصورة..." : `تم تحليل ${result?.total_products_detected ?? 0} منتج`}
+                {loading ? "جاري تحليل الصورة..." : `تم تحليل ${result?.detected_items_count ?? 0} منتج`}
               </div>
             </div>
           )}
 
           {!result && !loading && <ImageCapture onCapture={handleCapture} disabled={loading} />}
+          {!result && !loading && <VideoCapture onCapture={handleCapture} disabled={loading} />}
 
           {loading && (
             <div className="loading-wrapper">
@@ -1447,18 +1556,34 @@ export default function InventoryScannerPage() {
           {result && !loading && (
             <>
               <div className="stats-bar">
-                <StatCard label="إجمالي المنتجات" value={result.total_products_detected} icon="📦" />
+                <StatCard label="إجمالي المنتجات" value={result.detected_items_count} icon="📦" />
                 <StatCard label="دقة عالية" value={highConfidence} icon="✅" />
                 <StatCard label="فئات مختلفة" value={new Set(result.products.map((p) => p.category).filter(Boolean)).size} icon="🏷️" />
               </div>
 
               <QualityBar quality={result.analysis_quality} />
 
+              {result.total_estimated_value > 0 && (
+                <div className="total-value">
+                  <div className="total-value-label">القيمة التقديرية الإجمالية</div>
+                  <div className="total-value-amount">{result.total_estimated_value_formatted}</div>
+                </div>
+              )}
+
               {result.warnings.length > 0 && (
                 <div className="warnings-box">
                   <div className="warnings-title">⚠ تحذيرات التحليل</div>
                   <ul className="warnings-list">
                     {result.warnings.map((w, i) => (<li key={i}>• {w}</li>))}
+                  </ul>
+                </div>
+              )}
+
+              {result.suggestions.length > 0 && (
+                <div className="warnings-box" style={{ borderColor: "rgba(59,130,246,0.2)", background: "rgba(59,130,246,0.05)" }}>
+                  <div className="warnings-title" style={{ color: "#60a5fa" }}>💡 اقتراحات التحسين</div>
+                  <ul className="warnings-list" style={{ color: "#93c5fd" }}>
+                    {result.suggestions.map((s, i) => (<li key={i}>• {s}</li>))}
                   </ul>
                 </div>
               )}
@@ -1475,7 +1600,7 @@ export default function InventoryScannerPage() {
                   <p style={{ color: "#475569", fontSize: "0.85rem", textAlign: "center", padding: "2rem" }}>لم يتم اكتشاف أي منتجات</p>
                 ) : (
                   result.products.map((item, idx) => (
-                    <ProductCard key={idx} item={item} index={idx} onChange={handleFieldChange} onDelete={handleDelete} currencySymbol={currency.symbol} />
+                    <ProductCard key={idx} item={item} index={idx} onChange={handleFieldChange} onDelete={handleDelete} currencySymbol={result.currency_info.symbol} />
                   ))
                 )}
               </div>
@@ -1487,7 +1612,7 @@ export default function InventoryScannerPage() {
                   <div className="export-success">
                     <div className="export-success-icon">🎉</div>
                     <div className="export-success-text">تم الترحيل بنجاح!</div>
-                    <div className="export-success-sub">{result.total_products_detected} منتج تم إضافته إلى Google Sheets</div>
+                    <div className="export-success-sub">{result.detected_items_count} منتج تم إضافته إلى Google Sheets</div>
                     {spreadsheetId && (
                       <button className="btn btn-primary" style={{ marginTop: "1rem", width: "auto", fontSize: "0.85rem" }} onClick={() => window.open(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`, "_blank")}>
                         📄 فتح جدول البيانات
@@ -1503,7 +1628,7 @@ export default function InventoryScannerPage() {
                       </div>
                     )}
                     <button className="btn btn-export" onClick={handleExport} disabled={exporting || result.products.length === 0}>
-                      {exporting ? "⏳ جاري الترحيل..." : `📊 تأكيد الترحيل إلى Google Sheets (${result.total_products_detected} منتج)`}
+                      {exporting ? "⏳ جاري الترحيل..." : `📊 تأكيد الترحيل إلى Google Sheets (${result.detected_items_count} منتج)`}
                     </button>
                     <button className="btn btn-secondary" style={{ width: "100%", justifyContent: "center", marginTop: "0.6rem", padding: "0.85rem", background: "rgba(99,102,241,0.1)", borderColor: "rgba(99,102,241,0.3)", color: "#a5b4fc", fontSize: "0.9rem" }} onClick={() => setShowInvoice(true)} disabled={result.products.length === 0}>
                       🧾 إنشاء فاتورة احترافية PDF
@@ -1512,6 +1637,14 @@ export default function InventoryScannerPage() {
                 )}
                 <button className="btn btn-reset" onClick={handleReset}>↩ مسح ورفع صورة جديدة</button>
               </div>
+
+              {result._meta && (
+                <div style={{ fontSize: "0.6rem", color: "#334155", textAlign: "center", marginTop: "1rem", padding: "0.5rem" }}>
+                  ⚡ {result._meta.engine} · {result._meta.model} · {result._meta.duration_ms}ms
+                  {result._meta.prices_fetched && ` · أسعار السوق: ${result._meta.unique_products} منتج فريد`}
+                  {result._meta.country_detected && ` · ${result._meta.country_detected}`}
+                </div>
+              )}
             </>
           )}
         </main>
