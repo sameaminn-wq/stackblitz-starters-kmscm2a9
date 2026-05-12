@@ -33,7 +33,7 @@ const ALLOWED_MIME_TYPES = new Set([
 const FORMATS_NEEDING_CONVERSION = new Set([
   "image/heic", "image/heif", "image/bmp", "image/tiff", "image/avif"
 ]);
-const sharp = (await import('sharp')).default;
+
 const MAX_RETRIES          = 4;
 const BASE_RETRY_DELAY_MS  = 3000;
 const BATCH_PRICE_THRESHOLD = 6;
@@ -1121,7 +1121,9 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
-
+// ✅ أضف السطر هنا في السطر رقم 55
+  const sharp = (await import('sharp')).default;
+  const body = await request.json();
   if (!process.env.GEMINI_API_KEY?.trim()) {
     return NextResponse.json(
       { success: false, error: "مفتاح Gemini API غير موجود" },
