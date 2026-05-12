@@ -4,12 +4,11 @@
 // ║  Gemini 2.5 Flash · All Image Formats · Arabic-first         ║
 // ║  Supports: JPEG, PNG, WebP, GIF, BMP, TIFF, HEIC, AVIF       ║
 // ╚══════════════════════════════════════════════════════════════╝
-
+export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import sharp from 'sharp'; // أضف: npm install sharp
-import type { ProductItem, Confidence } from "../../../types"; 
-// تذكر: 3 مرات ../ لكي تخرج من (analyze ثم api ثم app) وتصل للجذر
+
+import type { ProductItem, Confidence } from "../../../types";
 
 // ──────────────────────────────────────────────────────────────
 // 1. CONFIGURATION
@@ -18,18 +17,16 @@ import type { ProductItem, Confidence } from "../../../types";
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 const MODEL_NAME = "gemini-2.5-flash";
 
-const MAX_IMAGE_SIZE_MB   = 10; // زيادة إلى 10MB لدعم الصور الأكبر
+const MAX_IMAGE_SIZE_MB   = 10;
 const MAX_IMAGE_BYTES     = MAX_IMAGE_SIZE_MB * 1024 * 1024;
 const MAX_BODY_BYTES      = 15 * 1024 * 1024;
 
-// دعم جميع أنواع الصور
 const ALLOWED_MIME_TYPES = new Set([
   "image/jpeg", "image/jpg", "image/png", "image/webp",
   "image/gif", "image/bmp", "image/tiff", "image/tif",
   "image/svg+xml", "image/heic", "image/heif", "image/avif"
 ]);
 
-// الصيغ التي تحتاج تحويل
 const FORMATS_NEEDING_CONVERSION = new Set([
   "image/heic", "image/heif", "image/bmp", "image/tiff", "image/avif"
 ]);
@@ -38,7 +35,7 @@ const MAX_RETRIES          = 4;
 const BASE_RETRY_DELAY_MS  = 3000;
 const BATCH_PRICE_THRESHOLD = 6;
 const MAX_PARALLEL_CHUNKS   = 3;
-const CACHE_TTL           = 24 * 60 * 60 * 1000; // 24 ساعة
+const CACHE_TTL           = 24 * 60 * 60 * 1000;
 
 // ──────────────────────────────────────────────────────────────
 // 2. TYPES
@@ -82,7 +79,7 @@ interface PriceCacheEntry {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 3. GEO + CURRENCY DATABASE (30+ عملة)
+// 3. GEO + CURRENCY DATABASE
 // ──────────────────────────────────────────────────────────────
 
 const CURRENCY_DB: Record<string, CurrencyInfo> = {
@@ -145,7 +142,7 @@ const COUNTRY_NAMES: Record<string, { ar: string; en: string; lang: "ar" | "en" 
 const DEFAULT_COUNTRY = "EG";
 
 // ──────────────────────────────────────────────────────────────
-// 4. PRICE CACHE (NEW)
+// 4. PRICE CACHE
 // ──────────────────────────────────────────────────────────────
 
 const priceCache = new Map<string, PriceCacheEntry>();
@@ -238,7 +235,7 @@ function sanitize(text: unknown, maxLen = 500): string {
 }
 
 // ──────────────────────────────────────────────────────────────
-// 7. TIMEOUT UTILITY (NEW)
+// 7. TIMEOUT UTILITY
 // ──────────────────────────────────────────────────────────────
 
 async function withTimeout<T>(
@@ -246,7 +243,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: NodeJS.Timeout | undefined = undefined;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -255,7 +252,9 @@ async function withTimeout<T>(
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -289,7 +288,7 @@ async function withRetry<T>(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 9. IMAGE CONVERSION & OPTIMIZATION (NEW - يدعم جميع الصيغ)
+// 9. IMAGE CONVERSION & OPTIMIZATION
 // ──────────────────────────────────────────────────────────────
 
 async function convertAndOptimizeImage(
@@ -298,11 +297,10 @@ async function convertAndOptimizeImage(
   maxWidth: number = 1024,
   maxHeight: number = 1024
 ): Promise<{ base64: string; mimeType: string; originalSize: number; optimizedSize: number }> {
-  
+  const sharp = (await import('sharp')).default;
   let buffer = Buffer.from(base64, 'base64');
   const originalSize = buffer.length;
   
-  // التحقق مما إذا كانت الصيغة تحتاج تحويل
   const needsConversion = FORMATS_NEEDING_CONVERSION.has(mimeType);
   let outputFormat: 'jpeg' | 'png' = 'jpeg';
   
@@ -317,7 +315,6 @@ async function convertAndOptimizeImage(
   try {
     let sharpInstance = sharp(buffer);
     
-    // تغيير الحجم إذا كان كبيراً
     const metadata = await sharpInstance.metadata();
     if (metadata.width && metadata.height) {
       if (metadata.width > maxWidth || metadata.height > maxHeight) {
@@ -328,7 +325,6 @@ async function convertAndOptimizeImage(
       }
     }
     
-    // تحويل وتحسين الجودة
     let optimizedBuffer: Buffer;
     let finalMimeType: string;
     
@@ -369,7 +365,6 @@ function extractJSON<T>(raw: string): T {
     throw new Error("Empty or invalid AI response");
   }
   
-  // تنظيف الاستجابة
   let text = raw
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
@@ -378,7 +373,6 @@ function extractJSON<T>(raw: string): T {
     .replace(/,\s*]/g, ']')
     .trim();
   
-  // البحث عن أول { أو [
   const objStart = text.indexOf("{");
   const arrStart = text.indexOf("[");
   
@@ -418,7 +412,6 @@ function extractJSON<T>(raw: string): T {
   try {
     return JSON.parse(text);
   } catch (firstError) {
-    // محاولة إصلاح الأخطاء الشائعة
     const fixed = text
       .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
       .replace(/:\s*'([^']*)'/g, ':"$1"')
@@ -430,7 +423,8 @@ function extractJSON<T>(raw: string): T {
       return JSON.parse(fixed);
     } catch (secondError) {
       console.error("[JSON] Failed to parse:", text.substring(0, 200));
-      throw new Error(`Invalid JSON format: ${firstError.message}`);
+      const errorMessage = firstError instanceof Error ? firstError.message : "Unknown error";
+      throw new Error(`Invalid JSON format: ${errorMessage}`);
     }
   }
 }
@@ -481,7 +475,6 @@ async function fetchPricesBatchWithCache(
   const results = new Map<string, PriceInfo>();
   const toFetch: UniqueProductEntry[] = [];
   
-  // التحقق من cache أولاً
   for (const entry of unique) {
     const cached = await getCachedPrice(entry.key, currencyCode);
     if (cached) {
@@ -560,7 +553,6 @@ async function fetchPricesParallelWithCache(
   const results = new Map<string, PriceInfo>();
   const toFetch: UniqueProductEntry[] = [];
   
-  // التحقق من cache أولاً
   for (const entry of unique) {
     const cached = await getCachedPrice(entry.key, currencyCode);
     if (cached) {
@@ -642,7 +634,7 @@ async function fetchMarketPrices(
 }
 
 // ──────────────────────────────────────────────────────────────
-// 13. IMAGE QUALITY ANALYSIS (NEW)
+// 13. IMAGE QUALITY ANALYSIS
 // ──────────────────────────────────────────────────────────────
 
 async function analyzeImageQuality(base64: string, mimeType: string): Promise<{
@@ -697,6 +689,13 @@ function buildMasterPrompt(ctx: GeoContext): string {
   const currency   = ctx.currency.code;
   const symbol     = ctx.currency.symbol;
   const country    = ctx.lang === "ar" ? ctx.countryNameAr : ctx.countryNameEn;
+  
+  const batch_id = `batch_${Date.now()}`;
+  const image_id = `img_${Math.random().toString(36).substr(2, 9)}`;
+  const timestamp = new Date().toISOString();
+  
+  const previous_scan_context = "None (Initial Scan)";
+  const planogram_reference = "Standard Layout v1.0";
 
   return `أنت "محرك الجرد البصري الشامل فائق الدقة v5.0"
   Multimodal Enterprise Inventory Vision Engine — MEIVE-5
@@ -712,8 +711,8 @@ function buildMasterPrompt(ctx: GeoContext): string {
   🧩 إصدار المخطط: 5.0.0
   📋 سياق الجلسة السابقة: ${previous_scan_context}
   📐 خطة الرف المعتمدة: ${planogram_reference}
-  ═══════════════════════════════════════════════════════════════════
   
+
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   🧠 الهوية التشغيلية
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1081,21 +1080,21 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
 
-  const confidence: Confidence =
-    ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
-
+  const currentConfidence = ["high", "medium", "low"].includes(raw.confidence) 
+    ? (raw.confidence as Confidence) 
+    : ("medium" as Confidence);
+    
   return {
     product_name:   sanitize(raw.product_name || unknownLabel, 300),
-    brand:          raw.brand ? sanitize(raw.brand, 150) : null,
+    brand:          raw.brand ? sanitize(raw.brand, 150) : "",
     category:       sanitize(raw.category || generalLabel, 150),
-    unit_price:     null,
-    quantity:       typeof raw.quantity === "number" && raw.quantity > 0
-                      ? Math.floor(raw.quantity)
-                      : 1,
-    barcode_serial: raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
-    confidence,
-    notes:          sanitize(raw.notes || "", 800),
-  };
+    unit_price:     raw.unit_price ? Number(raw.unit_price) : 0, 
+    quantity:       typeof raw.quantity === 'number' ? raw.quantity : 1,
+    barcode:        sanitize(raw.barcode_serial || raw.barcode || "", 100),
+    barcode_serial: sanitize(raw.barcode_serial || raw.barcode || "", 100),
+    confidence:     currentConfidence,
+    notes:          sanitize(raw.notes || "", 500)
+  } as any;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1104,7 +1103,7 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
-
+  
   if (!process.env.GEMINI_API_KEY?.trim()) {
     return NextResponse.json(
       { success: false, error: "مفتاح Gemini API غير موجود" },
@@ -1120,6 +1119,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // ✅ إصلاح المشكلة: تعريف body مرة واحدة فقط
   let body: {
     image?:           string;
     fetch_prices?:    boolean;
@@ -1156,7 +1156,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // تحويل وتحسين الصورة (يدعم جميع الصيغ)
+  // تحويل وتحسين الصورة
   let optimizedImage;
   try {
     optimizedImage = await convertAndOptimizeImage(base64, mimeType, 1024, 1024);
@@ -1178,7 +1178,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // تحليل جودة الصورة (اختياري)
+  // تحليل جودة الصورة
   let qualityAnalysis;
   try {
     qualityAnalysis = await analyzeImageQuality(base64, mimeType);
@@ -1303,7 +1303,7 @@ export async function POST(request: NextRequest) {
     total_estimated_value: totalValue,
     total_estimated_value_formatted: `${ctx.currency.symbol}${formattedTotal}`,
 
-    // معلومات جودة الصورة (جديدة)
+    // معلومات جودة الصورة
     image_quality_analysis: qualityAnalysis,
 
     // تعليمات التعديل اليدوي
@@ -1329,11 +1329,11 @@ export async function POST(request: NextRequest) {
       unique_products: uniqueCount,
       saved_api_calls: savedCalls,
       country_detected: ctx.countryCode,
-      image_optimization: {
-        original_size_kb: optimizedImage ? (optimizedImage.originalSize / 1024).toFixed(1) : null,
-        optimized_size_kb: optimizedImage ? (optimizedImage.optimizedSize / 1024).toFixed(1) : null,
+      image_optimization: optimizedImage ? {
+        original_size_kb: (optimizedImage.originalSize / 1024).toFixed(1),
+        optimized_size_kb: (optimizedImage.optimizedSize / 1024).toFixed(1),
         original_format: mimeType
-      },
+      } : null,
       supported_features: {
         all_image_formats: true,
         auto_conversion: true,

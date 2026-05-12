@@ -6,49 +6,53 @@ export type Confidence = "high" | "medium" | "low";
 export type FallbackLevel = 1 | 2 | 3 | 4 | 5;
 export type DetectionMethod = "ocr_only" | "visual_match" | "barcode_match" | "multimodal_match";
 
+// ✅ ProductItem الأساسي (متوافق مع API الفعلي)
 export interface ProductItem {
-  id: number; // معرف فريد لكل عنصر في الجلسة
   product_name: string;
   brand: string | null;
   category: string;
-  unit_price: number | null; 
-  quantity: number; 
-  barcode_serial: string | null;
+  unit_price: number | null;
+  quantity: number;
+  barcode: string;                    // ✅ API يرسل barcode
+  barcode_serial: string;             // ✅ API يرسل barcode_serial أيضاً
   confidence: Confidence;
   notes: string;
   
-  // ✅ إضافات MEIVE-5 الأساسية (للتوافق مع المحرك)
-  fallback_level: FallbackLevel;         // مستوى التراجع الهرمي
-  detection_method: DetectionMethod;    // طريقة الاكتشاف
-  confidence_score: number;             // درجة الثقة من 0.0 إلى 1.0
-  image_region: string;                 // مكان المنتج (top-left, middle, etc.)
-  is_estimated: boolean;                // هل الكمية تقديرية (بسبب وجود عناصر مخفية)
-  compliance_flags: string[];           // مخالفات الامتثال (تالف، ناقص، بدون باركود)
+  // ✅ حقول اختيارية من API
+  id?: number;
+  fallback_level?: FallbackLevel;
+  detection_method?: DetectionMethod;
+  confidence_score?: number;
+  image_region?: string;
+  is_estimated?: boolean;
+  compliance_flags?: string[];
 }
 
-// ✅ جديد: تقدير السعر (نطاق مقترح)
+// ✅ تقدير السعر (نطاق مقترح)
 export interface PriceEstimate {
-  min_price: number | null;      
-  max_price: number | null;      
-  suggested_price: number | null; 
+  min_price: number | null;
+  max_price: number | null;
+  suggested_price: number | null;
   confidence: Confidence;
-  source: string;                 
+  source: string;
 }
 
-// ✅ جديد: منتج قابل للتعديل (يستخدم في الواجهة الأمامية)
+// ✅ منتج قابل للتعديل (يستخدم في الواجهة الأمامية)
 export interface EditableProductItem extends ProductItem {
-  original_price?: number | null;      
-  price_estimate?: PriceEstimate;      
-  is_edited?: boolean;                  
-  last_modified?: string;               
-  editable_fields?: string[];           
+  original_price?: number | null;
+  price_estimate?: PriceEstimate;
+  is_edited?: boolean;
+  last_modified?: string;
+  editable_fields?: string[];
   
-  // ✅ بيانات إضافية من MEIVE-5 للواجهة
-  shelf_position?: string;              // وضعية الرف (top, middle, bottom)
-  uncertainty_type?: string;            // سبب عدم التأكد (blur, occlusion)
+  shelf_position?: string;
+  uncertainty_type?: string;
 }
 
+// ✅ نتيجة التحليل الأساسية (من API)
 export interface InventoryAnalysisResult {
+  success: boolean;
+  editable: boolean;
   business_type: string;
   analysis_quality: "excellent" | "good" | "fair" | "poor";
   detected_items_count: number;
@@ -57,32 +61,50 @@ export interface InventoryAnalysisResult {
   suggestions: string[];
   detected_location?: string;
   timestamp?: string;
-}
-
-// ✅ جديد: نتيجة التحليل الموسعة (مع دعم التعديل وتوافق MEIVE-5)
-export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult {
-  editable: boolean;                     
-  allow_price_editing: boolean;         
-  allow_quantity_editing: boolean;      
-  products: EditableProductItem[];      
+  
+  // حقول إضافية من API
+  total_estimated_value: number;
+  total_estimated_value_formatted: string;
   currency_info: {
     code: string;
     symbol: string;
     name: string;
     exchange_rate_to_usd: number;
   };
+  image_quality_analysis?: {
+    has_barcodes: boolean;
+    has_qr_codes: boolean;
+    has_prices_on_shelves: boolean;
+    image_quality_score: number;
+    lighting_quality: string;
+    suggested_improvements: string[];
+  } | null;
+  _meta?: {
+    engine: string;
+    model: string;
+    duration_ms: number;
+    prices_fetched: boolean;
+    unique_products: number;
+    saved_api_calls: number;
+    country_detected: string;
+  };
+}
+
+// ✅ نتيجة التحليل الموسعة (مع دعم التعديل)
+export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult {
+  editable: boolean;
+  allow_price_editing: boolean;
+  allow_quantity_editing: boolean;
+  products: EditableProductItem[];
   
-  // ✅ تحليل إحصائي متقدم من المحرك الخامس
-  summary_metrics: {
+  summary_metrics?: {
     high_confidence_count: number;
     compliance_issues_count: number;
     manual_review_required_count: number;
     inventory_density: "low" | "medium" | "high";
   };
 
-  total_estimated_value: number;
-  total_estimated_value_formatted: string;
-  edit_instructions: {
+  edit_instructions?: {
     ar: string;
     en: string;
   };
@@ -98,19 +120,9 @@ export interface EditableInventoryAnalysisResult extends InventoryAnalysisResult
       price_range_hint: string;
     };
   };
-  
-  _meta?: {
-    engine: string;           // سيكتب هنا "MEIVE-5"
-    model: string;
-    duration_ms: number;
-    prices_fetched: boolean;
-    unique_products: number;
-    saved_api_calls: number;
-    country_detected: string;
-    image_quality_score: string; // جودة الصورة الملتقطة
-  };
 }
 
+// ✅ طلب التصدير
 export interface ExportRequest {
   products: ProductItem[];
   invoiceTitle?: string;
@@ -119,27 +131,186 @@ export interface ExportRequest {
   currency?: string;
 }
 
-// ✅ جديد: طلب تحديث المنتج (لحفظ التعديلات)
+// ✅ طلب تحديث المنتج
 export interface UpdateProductRequest {
-  product_id?: number;              
+  product_id?: number;
   product_name?: string;
   quantity?: number;
   unit_price?: number | null;
   notes?: string;
 }
 
-// ✅ جديد: طلب حفظ التعديلات (للـ API)
+// ✅ طلب حفظ التعديلات
 export interface SaveEditsRequest {
   products: UpdateProductRequest[];
-  session_id?: string;              
+  session_id?: string;
   timestamp?: string;
 }
 
-// ✅ جديد: رد حفظ التعديلات
+// ✅ رد حفظ التعديلات
 export interface SaveEditsResponse {
   success: boolean;
   message: string;
   updated_products: ProductItem[];
   new_total_value: number;
   new_total_formatted: string;
+}
+
+// ============================================================
+// ✅ دوال مساعدة للتحويل بين الأنواع
+// ============================================================
+
+/**
+ * تحويل ProductItem من API إلى EditableProductItem
+ */
+export function toEditableProduct(product: ProductItem, index?: number): EditableProductItem {
+  return {
+    ...product,
+    id: product.id ?? index ?? 0,
+    fallback_level: product.fallback_level ?? 2,
+    detection_method: product.detection_method ?? "multimodal_match",
+    confidence_score: product.confidence_score ?? (product.confidence === "high" ? 0.9 : product.confidence === "medium" ? 0.7 : 0.4),
+    image_region: product.image_region ?? "middle-center",
+    is_estimated: product.is_estimated ?? false,
+    compliance_flags: product.compliance_flags ?? [],
+    editable_fields: ["quantity", "unit_price", "product_name", "notes", "brand", "category", "barcode"],
+    original_price: product.unit_price,
+    is_edited: false,
+  };
+}
+
+/**
+ * تحويل EditableProductItem إلى UpdateProductRequest
+ */
+export function toUpdateRequest(product: EditableProductItem): UpdateProductRequest {
+  return {
+    product_id: product.id,
+    product_name: product.product_name,
+    quantity: product.quantity,
+    unit_price: product.unit_price,
+    notes: product.notes,
+  };
+}
+
+/**
+ * حساب إجمالي قيمة المنتجات
+ */
+export function calculateTotalValue(products: ProductItem[]): number {
+  return products.reduce((sum, p) => {
+    return p.unit_price ? sum + p.unit_price * (p.quantity || 1) : sum;
+  }, 0);
+}
+
+/**
+ * تنسيق القيمة كعملة
+ */
+export function formatTotalValue(total: number, currencySymbol: string = "$"): string {
+  return `${currencySymbol}${total.toLocaleString("ar-EG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/**
+ * إنشاء ProductItem جديد فارغ
+ */
+export function createEmptyProduct(): ProductItem {
+  return {
+    product_name: "منتج جديد",
+    brand: null,
+    category: "عام",
+    unit_price: null,
+    quantity: 1,
+    barcode: "",
+    barcode_serial: "",
+    confidence: "medium",
+    notes: "",
+  };
+}
+
+/**
+ * نسخ ProductItem للتعديل
+ */
+export function copyProduct(product: ProductItem): ProductItem {
+  return {
+    ...product,
+    product_name: product.product_name,
+    brand: product.brand,
+    category: product.category,
+    unit_price: product.unit_price,
+    quantity: product.quantity,
+    barcode: product.barcode,
+    barcode_serial: product.barcode_serial,
+    confidence: product.confidence,
+    notes: product.notes,
+  };
+}
+
+/**
+ * التحقق من صحة ProductItem
+ */
+export function isValidProduct(product: ProductItem): boolean {
+  return !!(product.product_name && product.product_name.trim().length > 0);
+}
+
+/**
+ * الحصول على نطاق ثقة readable
+ */
+export function getConfidenceLabel(confidence: Confidence, lang: "ar" | "en" = "ar"): string {
+  const labels = {
+    high: { ar: "دقة عالية", en: "High" },
+    medium: { ar: "دقة متوسطة", en: "Medium" },
+    low: { ar: "دقة منخفضة", en: "Low" },
+  };
+  return labels[confidence][lang];
+}
+
+/**
+ * الحصول على لون الثقة للـ UI
+ */
+export function getConfidenceColor(confidence: Confidence): string {
+  const colors = {
+    high: "#10b981",  // أخضر
+    medium: "#f59e0b", // برتقالي
+    low: "#ef4444",    // أحمر
+  };
+  return colors[confidence];
+}
+
+/**
+ * تصفية المنتجات حسب الثقة
+ */
+export function filterByConfidence(products: ProductItem[], minConfidence: Confidence): ProductItem[] {
+  const order: Record<Confidence, number> = { high: 3, medium: 2, low: 1 };
+  const minLevel = order[minConfidence];
+  return products.filter(p => order[p.confidence] >= minLevel);
+}
+
+/**
+ * إحصائيات المنتجات
+ */
+export interface ProductStats {
+  total: number;
+  highConfidence: number;
+  mediumConfidence: number;
+  lowConfidence: number;
+  totalValue: number;
+  uniqueBrands: number;
+  uniqueCategories: number;
+  estimatedCount: number;
+  manualReviewNeeded: number;
+}
+
+/**
+ * حساب إحصائيات المنتجات
+ */
+export function getProductStats(products: ProductItem[]): ProductStats {
+  return {
+    total: products.length,
+    highConfidence: products.filter(p => p.confidence === "high").length,
+    mediumConfidence: products.filter(p => p.confidence === "medium").length,
+    lowConfidence: products.filter(p => p.confidence === "low").length,
+    totalValue: calculateTotalValue(products),
+    uniqueBrands: new Set(products.map(p => p.brand).filter(Boolean)).size,
+    uniqueCategories: new Set(products.map(p => p.category).filter(Boolean)).size,
+    estimatedCount: products.filter(p => p.is_estimated).length,
+    manualReviewNeeded: products.filter(p => p.compliance_flags?.includes("manual_review_needed")).length,
+  };
 }
