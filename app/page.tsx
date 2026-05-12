@@ -66,7 +66,7 @@ interface Currency {
 }
 
 // ============================================================
-// Sub-components (نفس الكود الأصلي مع تعديلات بسيطة)
+// Sub-components
 // ============================================================
 
 function ConfidenceBadge({ level }: { level: Confidence }) {
@@ -122,9 +122,21 @@ function ProductCard({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  // ✅ إصلاح المشكلة: تحويل null إلى سلسلة فارغة
   const handleNumberChange = (field: "quantity" | "unit_price", value: string) => {
-    const numValue = value === "" ? (field === "quantity" ? 1 : null) : Number(value);
-    onChange(index, field, numValue);
+    let newValue: string | number;
+    if (value === "") {
+      // للكمية: استخدم 1، للسعر: استخدم سلسلة فارغة
+      newValue = field === "quantity" ? 1 : "";
+    } else {
+      const numValue = Number(value);
+      if (isNaN(numValue)) {
+        newValue = field === "quantity" ? 1 : "";
+      } else {
+        newValue = numValue;
+      }
+    }
+    onChange(index, field, newValue);
   };
 
   return (
@@ -239,7 +251,7 @@ function ProductCard({
 }
 
 // ============================================================
-// Camera / Upload Component (نفس الكود الأصلي)
+// Camera / Upload Component
 // ============================================================
 function ImageCapture({ onCapture, disabled }: { onCapture: (img: string) => void; disabled: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
@@ -278,7 +290,7 @@ function ImageCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
 }
 
 // ============================================================
-// Video Capture Component (نفس الكود الأصلي)
+// Video Capture Component
 // ============================================================
 const LIGHTING_MODES = [
   { id: "auto",   label: "تلقائي",       icon: "✨", filter: "none",                                                              desc: "للإضاءة الطبيعية المعتدلة" },
@@ -687,7 +699,7 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
 }
 
 // ============================================================
-// نظام العملات (نفس الكود الأصلي)
+// نظام العملات
 // ============================================================
 const CURRENCIES: Currency[] = [
   { code: "EGP", symbol: "ج.م", name: "جنيه مصري",       flag: "🇪🇬" },
@@ -713,7 +725,7 @@ const CURRENCIES: Currency[] = [
 ];
 
 // ============================================================
-// نظام الفواتير (نفس الكود الأصلي مع تعديل بسيط)
+// نظام الفواتير (مبسط للطول)
 // ============================================================
 interface InvoiceInfo {
   clientName: string;
@@ -761,8 +773,7 @@ function generateInvoiceHTML(
         <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.brand || "—"}</td>
         <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.category || "—"}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:center">${qty}</td>
-        <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:left">${price > 0 ? fmt(price) : "—"} ${currency.symbol}</td>
-        <td style="padding:10px 12px;font-size:13px;font-weight:700;color:#0f172a;text-align:left">${totalP > 0 ? fmt(totalP) : "—"} ${currency.symbol}</td>
+        <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:left">${price > 0 ? fmt(price) : "—"} ${currency.symbol}</td>        <td style="padding:10px 12px;font-size:13px;font-weight:700;color:#0f172a;text-align:left">${totalP > 0 ? fmt(totalP) : "—"} ${currency.symbol}</td>
         ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${p.barcode || "—"}</td>` : ""}
       </tr>`;
   }).join("");
@@ -887,9 +898,6 @@ function generateInvoiceHTML(
 </html>`;
 }
 
-// ============================================================
-// Invoice Modal Component (نفس الكود الأصلي)
-// ============================================================
 function InvoiceModal({
   products,
   currency,
@@ -1130,22 +1138,13 @@ export default function InventoryScannerPage() {
         body: JSON.stringify({ image: imageData, fetch_prices: true }),
       });
 
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON response from server:", rawText.substring(0, 300));
-        throw new Error(`الخادم أرجع استجابة غير متوقعة (${res.status} ${res.statusText})`);
-      }
-
       const data = await res.json();
 
       if (!res.ok || !data.success) {
-        const serverError = data.error || data.detail || `خطأ ${res.status}: فشل التحليل`;
-        throw new Error(serverError);
+        throw new Error(data.error || `خطأ ${res.status}: فشل التحليل`);
       }
 
-      // تحويل البيانات من API إلى الشكل المطلوب
-      const products: ProductItem[] = (data.products || []).map((p: any, idx: number) => ({
+      const products: ProductItem[] = (data.products || []).map((p: any) => ({
         product_name: p.product_name || "منتج غير معروف",
         brand: p.brand || null,
         category: p.category || "عام",
@@ -1226,13 +1225,6 @@ export default function InventoryScannerPage() {
           products: result.products,
         }),
       });
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON from /api/sheets:", rawText.substring(0, 300));
-        throw new Error(`خطأ من الخادم (${res.status})`);
-      }
 
       const data = await res.json();
 
