@@ -9,17 +9,26 @@ import type { ProductItem, ExportRequest, Confidence } from "../../../types";
 // ============================================================
 
 // وظيفة للتحقق من صحة ProductItem
-function isValidProductItem(item: any): item is ProductItem {
+function isValidProductItem(item: unknown): item is ProductItem {
+  if (typeof item !== "object" || item === null) return false;
+  const product = item as Record<string, unknown>;
   return (
-    typeof item === 'object' && item !== null &&
-    typeof item.product_name === 'string' &&
-    (item.brand === null || typeof item.brand === 'string') &&
-    typeof item.category === 'string' &&
-    (item.unit_price === null || (typeof item.unit_price === 'number' && item.unit_price >= 0)) &&
-    (typeof item.quantity === 'number' && item.quantity >= 0) &&
-    (item.barcode_serial === null || typeof item.barcode_serial === 'string') &&
-    (['high', 'medium', 'low'] as Confidence[]).includes(item.confidence) &&
-    typeof item.notes === 'string'
+    Number.isInteger(product.id) &&
+    typeof product.product_name === "string" && product.product_name.length <= 300 &&
+    (product.brand === null || (typeof product.brand === "string" && product.brand.length <= 150)) &&
+    typeof product.category === "string" && product.category.length <= 150 &&
+    (product.unit_price === null || (typeof product.unit_price === "number" && Number.isFinite(product.unit_price) && product.unit_price >= 0)) &&
+    typeof product.quantity === "number" && Number.isFinite(product.quantity) && product.quantity >= 0 &&
+    (product.barcode_serial === null || (typeof product.barcode_serial === "string" && product.barcode_serial.length <= 100)) &&
+    (["high", "medium", "low"] as Confidence[]).includes(product.confidence as Confidence) &&
+    typeof product.notes === "string" && product.notes.length <= 800 &&
+    Number.isInteger(product.fallback_level) && Number(product.fallback_level) >= 1 && Number(product.fallback_level) <= 5 &&
+    ["ocr_only", "visual_match", "barcode_match", "multimodal_match"].includes(String(product.detection_method)) &&
+    typeof product.confidence_score === "number" && Number.isFinite(product.confidence_score) && product.confidence_score >= 0 && product.confidence_score <= 1 &&
+    typeof product.image_region === "string" && product.image_region.length <= 40 &&
+    typeof product.is_estimated === "boolean" &&
+    Array.isArray(product.compliance_flags) && product.compliance_flags.length <= 20 &&
+    product.compliance_flags.every((flag) => typeof flag === "string" && flag.length <= 80)
   );
 }
 
@@ -39,13 +48,13 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-  const page = pdfDoc.addPage();
+  const page = pdfDoc.addPage([842, 595]);
 
   const { width, height } = page.getSize();
   let y = height - 50;
-  const margin = 50;
-  const fontSize = 12;
-  const headerFontSize = 18;
+  const margin = 24;
+  const fontSize = 8;
+  const headerFontSize = 14;
 
   // عنوان التقرير
   page.drawText(exportDetails.invoiceTitle || "تقرير جرد المخزون", {
@@ -71,7 +80,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
 
   // رأس الجدول
   const tableHeaders = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  const columnWidths = [30, 120, 80, 80, 50, 70, 70, 80, 50, 100];
+  const columnWidths = [22, 112, 68, 68, 38, 58, 58, 72, 42, 100];
   let x = margin;
 
   for (let i = 0; i < tableHeaders.length; i++) {
@@ -234,11 +243,16 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
  */
 export async function POST(request: NextRequest) {
   try {
-    const { products, exportType, invoiceTitle, invoiceNumber, customerName, currency }: ExportRequest & { exportType: "pdf" | "excel" } = await request.json();
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, "utf8") > 5 * 1024 * 1024) {
+      return NextResponse.json({ success: false, error: "حجم طلب التصدير يتجاوز الحد المسموح." }, { status: 413 });
+    }
+    const payload = JSON.parse(rawBody) as ExportRequest & { exportType?: string };
+    const { products, exportType, invoiceTitle, invoiceNumber, customerName, currency } = payload;
 
     // 1. التحقق من صحة المنتجات المدخلة (Input Validation)
-    if (!products || !Array.isArray(products) || products.length === 0) {
-      return NextResponse.json({ success: false, error: "لا توجد منتجات للتصدير." }, { status: 400 });
+    if (!products || !Array.isArray(products) || products.length === 0 || products.length > 300) {
+      return NextResponse.json({ success: false, error: "يجب إرسال من 1 إلى 300 منتج للتصدير." }, { status: 400 });
     }
 
     const invalidProducts = products.filter(item => !isValidProductItem(item));
@@ -254,10 +268,10 @@ export async function POST(request: NextRequest) {
     // For production, consider storing products in a DB and exporting by ID rather than direct client input.
     const exportDetails: ExportRequest = {
       products,
-      invoiceTitle: invoiceTitle || "تقرير جرد المخزون",
-      invoiceNumber,
-      customerName,
-      currency,
+      invoiceTitle: typeof invoiceTitle === "string" ? invoiceTitle.replace(/[\\\\/:*?\[\]]/g, " ").slice(0, 80) : "تقرير جرد المخزون",
+      invoiceNumber: typeof invoiceNumber === "string" ? invoiceNumber.slice(0, 60) : undefined,
+      customerName: typeof customerName === "string" ? customerName.slice(0, 150) : undefined,
+      currency: typeof currency === "string" ? currency.slice(0, 12) : undefined,
     };
 
     let fileBuffer: Buffer;
