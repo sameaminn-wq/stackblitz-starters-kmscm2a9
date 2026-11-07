@@ -27,6 +27,24 @@ jobs:
         run: npm audit fix --package-lock-only || true
       - name: Clean install
         run: npm ci
+      - name: Runtime smoke tests
+        run: |
+          node <<'NODE'
+          const ExcelJS = require("exceljs");
+          const sharp = require("sharp");
+          (async () => {
+            const workbook = new ExcelJS.Workbook();
+            const sheet = workbook.addWorksheet("Smoke");
+            sheet.addRow(["export", "works"]);
+            const excelBuffer = await workbook.xlsx.writeBuffer();
+            if (!excelBuffer.byteLength) throw new Error("ExcelJS produced an empty workbook");
+            const imageBuffer = await sharp({
+              create: { width: 2, height: 2, channels: 3, background: "#ffffff" }
+            }).png().toBuffer();
+            if (!imageBuffer.length) throw new Error("Sharp produced an empty image");
+            console.log("ExcelJS and Sharp runtime smoke tests passed.");
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
       - name: Dependency audit
         run: npm audit || true
       - name: Lint
