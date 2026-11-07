@@ -1412,7 +1412,8 @@ export async function GET(request: NextRequest) {
     features: {
       auto_geo_detection: true,
       live_market_prices: false,
-      batch_price_fetching: true,
+      batch_price_fetching: false,
+      optional_model_price_estimates: true,
       deduplication: true,
       exponential_backoff: true,
       arabic_first: true,
