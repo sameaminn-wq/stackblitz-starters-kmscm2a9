@@ -8,7 +8,7 @@
 
 The repository was a prototype with mismatched API/UI contracts, incomplete export integration, weak image-input limits, and invoice HTML assembled from user-controlled values. This pass repairs the highest-impact issues that could be addressed safely without redesigning the product.
 
-This report does **not** certify production readiness. Automated checks are pending, and several product, security, and operational capabilities remain unimplemented.
+This report does **not** certify production readiness. The automated install, audit, lint, type-check, build, and selected runtime smoke checks pass; device testing and several product and operational capabilities remain unimplemented.
 
 ## Changes made
 
@@ -40,22 +40,27 @@ This report does **not** certify production readiness. Automated checks are pend
 
 ### 5. Project metadata and CI
 - Replaced default Next.js metadata and set the document language/direction to Arabic.
-- Added GitHub Actions checks for `npm ci`, `npx tsc --noEmit`, and `npm run build`.
+- Added GitHub Actions checks for `npm ci`, runtime smoke tests, `npm audit`, ESLint, TypeScript, and production build.
+- Upgraded the framework to Next.js 16.4.5 with React 19.2, ESLint 9, Sharp 0.35.5, and patched PostCSS. Added compatible transitive dependency overrides and refreshed `package-lock.json`.
 
 ## Verification status
 
 | Check | Status |
 |---|---|
 | Source review of modified files | Completed |
-| TypeScript CI check | Pending GitHub Actions |
-| Next.js production build | Pending GitHub Actions |
+| Clean dependency install (`npm ci`) | Passed |
+| Dependency audit (`npm audit`) | Passed — 0 vulnerabilities reported |
+| ExcelJS + Sharp runtime smoke tests | Passed |
+| ESLint | Passed |
+| TypeScript (`npx tsc --noEmit`) | Passed |
+| Next.js 16.4.5 production build | Passed |
 | Runtime camera test on browser/device | Not yet performed |
 | Real image accuracy benchmark | Not yet performed |
 | Excel export opened in Excel/LibreOffice | Not yet performed |
 | Invoice print/PDF visual test | Not yet performed |
 | Security penetration test | Not performed |
 
-A green Vercel preview-comment check only confirms that no unresolved Vercel feedback comments were found; it is not a build or runtime test.
+The passing CI run includes dependency installation, a zero-finding npm audit, runtime smoke tests for ExcelJS and Sharp, ESLint, TypeScript, and a Next.js production build. These checks do not replace camera/device, image-accuracy, or full security testing.
 
 ## Remaining blockers before a real pilot
 
