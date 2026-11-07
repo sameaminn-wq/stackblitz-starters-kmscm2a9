@@ -1142,13 +1142,23 @@ export async function POST(request: NextRequest) {
   }
 
   let body: {
-    image?:           string;
-    fetch_prices?:    boolean;
+    image?: string;
+    fetch_prices?: boolean;
     country_override?: string;
   };
 
   try {
-    body = await request.json();
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, "utf8") > MAX_BODY_BYTES) {
+      return NextResponse.json(
+        { success: false, error: `حجم الطلب كبير جداً. الحد الأقصى ${MAX_BODY_BYTES / 1e6}MB.` },
+        { status: 413 }
+      );
+    }
+    body = JSON.parse(rawBody);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("Invalid request body");
+    }
   } catch {
     return NextResponse.json(
       { success: false, error: "الطلب غير صالح — يجب أن يكون JSON." },
