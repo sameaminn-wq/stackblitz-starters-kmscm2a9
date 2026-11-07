@@ -1,6 +1,5 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import ExcelJS from "exceljs";
 import type { ProductItem, ExportRequest, Confidence } from "../../../types";
 
@@ -30,124 +29,6 @@ function isValidProductItem(item: unknown): item is ProductItem {
     Array.isArray(product.compliance_flags) && product.compliance_flags.length <= 20 &&
     product.compliance_flags.every((flag) => typeof flag === "string" && flag.length <= 80)
   );
-}
-
-/**
- * توليد تقرير PDF احترافي من بيانات الجرد.
- * @param products - قائمة المنتجات المراد تضمينها في التقرير.
- * @param exportDetails - تفاصيل إضافية للتصدير مثل عنوان الفاتورة.
- * @returns Buffer يحتوي على بيانات ملف PDF.
- */
-async function generatePdfReport(products: ProductItem[], exportDetails: ExportRequest): Promise<Buffer> {
-  const pdfDoc = await PDFDocument.create();
-  // تحميل الخطوط العربية
-  // ملاحظة: pdf-lib لا يدعم الخطوط العربية بشكل مباشر بدون مكتبات إضافية أو تضمين خطوط مخصصة.
-  // لاستخدام الخطوط العربية بشكل صحيح، ستحتاج إلى تضمين خط يدعم اللغة العربية (مثل NotoSansArabic-Regular.ttf)
-  // وتحويل النص إلى أشكال (glyphs) قبل الرسم. هذا يتطلب تعقيداً إضافياً.
-  // حالياً، سيتم استخدام خطوط لاتينية قياسية، وقد تظهر الحروف العربية بشكل منفصل أو غير صحيح.
-  const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-
-  let page = pdfDoc.addPage([842, 595]);
-
-  const { width, height } = page.getSize();
-  let y = height - 50;
-  const margin = 24;
-  const fontSize = 8;
-  const headerFontSize = 14;
-
-  // عنوان التقرير
-  page.drawText(exportDetails.invoiceTitle || "تقرير جرد المخزون", {
-    x: margin,
-    y: y,
-    font: font,
-    size: headerFontSize,
-    color: rgb(0, 0.53, 0.71), // أزرق داكن
-  });
-  y -= 30;
-
-  // تفاصيل إضافية
-  if (exportDetails.invoiceNumber) {
-    page.drawText(`رقم الفاتورة: ${exportDetails.invoiceNumber}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
-  }
-  if (exportDetails.customerName) {
-    page.drawText(`العميل: ${exportDetails.customerName}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
-  }
-  page.drawText(`التاريخ: ${new Date().toLocaleDateString()}`, { x: margin, y: y, font: fallbackFont, size: fontSize });
-  y -= 40;
-
-  // رأس الجدول
-  const tableHeaders = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  const columnWidths = [22, 112, 68, 68, 38, 58, 58, 72, 42, 100];
-  let x = margin;
-
-  for (let i = 0; i < tableHeaders.length; i++) {
-    page.drawText(tableHeaders[i], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
-    x += columnWidths[i];
-  }
-  y -= 15;
-  page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
-  y -= 10;
-
-  // بيانات المنتجات
-  let totalAmount = 0;
-  for (let i = 0; i < products.length; i++) {
-    const product = products[i];
-    const price = product.unit_price || 0;
-    const qty = product.quantity || 0;
-    const total = price * qty;
-    totalAmount += total;
-
-    x = margin;
-    page.drawText((i + 1).toString(), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[0];
-    page.drawText(product.product_name || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[1];
-    page.drawText(product.brand || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[2];
-    page.drawText(product.category || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[3];
-    page.drawText(qty.toString(), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[4];
-    page.drawText(price.toFixed(2), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[5];
-    page.drawText(total.toFixed(2), { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[6];
-    page.drawText(product.barcode_serial || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[7];
-    page.drawText(product.confidence || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    x += columnWidths[8];
-    page.drawText(product.notes || "", { x: x, y: y, font: fallbackFont, size: fontSize });
-    y -= 20;
-
-    if (y < margin) {
-      page = pdfDoc.addPage([842, 595]);
-      y = height - margin;
-      // إعادة رسم رأس الجدول للصفحة الجديدة
-      x = margin;
-      for (let j = 0; j < tableHeaders.length; j++) {
-        page.drawText(tableHeaders[j], { x: x, y: y, font: font, size: fontSize, color: rgb(0, 0, 0) });
-        x += columnWidths[j];
-      }
-      y -= 15;
-      page.drawLine({ start: { x: margin, y: y }, end: { x: width - margin, y: y }, color: rgb(0, 0, 0), thickness: 1 });
-      y -= 10;
-    }
-  }
-
-  // الإجمالي الكلي
-  y -= 20;
-  page.drawText(`الإجمالي الكلي: ${totalAmount.toFixed(2)} ${exportDetails.currency || "USD"}`, {
-    x: width - margin - 150,
-    y: y,
-    font: font,
-    size: fontSize + 2,
-    color: rgb(0, 0, 0),
-  });
-
-  return Buffer.from(await pdfDoc.save());
 }
 
 /**
@@ -269,8 +150,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: "تحقق من صحة بيانات المنتجات المدخلة. بعض المنتجات غير صالحة.", invalidProducts }, { status: 400 });
     }
 
-    if (!exportType || (exportType !== "pdf" && exportType !== "excel")) {
-      return NextResponse.json({ success: false, error: "نوع التصدير غير صالح (يجب أن يكون 'pdf' أو 'excel')." }, { status: 400 });
+    if (exportType !== "excel") {
+      return NextResponse.json({ success: false, error: "التصدير عبر هذا المسار متاح بصيغة Excel حالياً. استخدم طباعة الفاتورة من الواجهة لحفظها PDF." }, { status: 400 });
     }
 
     // 2. تأمين بيانات التصدير (Sanitization is handled by pdf-lib and exceljs by default for text)
@@ -283,19 +164,9 @@ export async function POST(request: NextRequest) {
       currency: typeof currency === "string" ? currency.slice(0, 12) : undefined,
     };
 
-    let fileBuffer: Buffer;
-    let fileName: string;
-    let contentType: string;
-
-    if (exportType === "pdf") {
-      fileBuffer = await generatePdfReport(products, exportDetails);
-      fileName = `inventory_report_${Date.now()}.pdf`;
-      contentType = "application/pdf";
-    } else { // exportType === "excel"
-      fileBuffer = await generateExcelReport(products, exportDetails);
-      fileName = `inventory_report_${Date.now()}.xlsx`;
-      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    }
+    const fileBuffer = await generateExcelReport(products, exportDetails);
+    const fileName = `inventory_report_${Date.now()}.xlsx`;
+    const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     // إرسال الملف كاستجابة
     return new NextResponse(fileBuffer, {
@@ -330,7 +201,7 @@ export async function GET() {
     endpoint: "/api/export",
     message: "Inventory Export API is running",
     version: "2026.4.30-export-v2", // تحديث رقم الإصدار
-    supported_formats: ["pdf", "excel"],
-    usage: "POST with { products, exportType, ...optionalDetails } to generate reports."
+    supported_formats: ["excel"],
+    usage: "POST with { products, exportType: \"excel\", ...optionalDetails } to generate an Excel report."
   });
 }
