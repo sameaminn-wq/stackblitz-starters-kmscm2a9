@@ -467,7 +467,7 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
               display: "flex", alignItems: "center", gap: "5px",
             }}>
               <span style={{ animation: "pulse-rec 1s infinite" }}>●</span>
-              <span>جرد تلقائي كل 3ث</span>
+              <span>التقاط تلقائي بعد 3 ثوانٍ</span>
             </div>
           )}
 
