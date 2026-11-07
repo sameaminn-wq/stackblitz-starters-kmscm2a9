@@ -10,14 +10,21 @@ type Confidence = "high" | "medium" | "low";
 type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
 
 interface ProductItem {
+  id?: number;
   product_name: string;
-  brand: string;
+  brand: string | null;
   category: string;
-  unit_price: string;
-  quantity: number | string;
-  barcode: string;
+  unit_price: number | null;
+  quantity: number;
+  barcode_serial: string | null;
   confidence: Confidence;
   notes: string;
+  fallback_level?: 1 | 2 | 3 | 4 | 5;
+  detection_method?: "ocr_only" | "visual_match" | "barcode_match" | "multimodal_match";
+  confidence_score?: number;
+  image_region?: string;
+  is_estimated?: boolean;
+  compliance_flags?: string[];
 }
 
 interface AnalysisResult {
@@ -113,7 +120,7 @@ function ProductCard({
           <span className="qs-label">السعر</span>
           <span className="qs-value">{item.unit_price ? `${item.unit_price} ${currencySymbol}` : "—"}</span>
         </div>
-        {item.barcode && (
+        {item.barcode_serial && (
           <div className="quick-stat">
             <span className="qs-label">باركود</span>
             <span className="qs-value barcode">{item.barcode}</span>
@@ -131,7 +138,7 @@ function ProductCard({
                 { key: "category", label: "التصنيف" },
                 { key: "unit_price", label: "السعر" },
                 { key: "quantity", label: "الكمية" },
-                { key: "barcode", label: "الباركود" },
+                { key: "barcode_serial", label: "الباركود" },
               ] as { key: keyof ProductItem; label: string }[]
             ).map(({ key, label }) => (
               <div key={key} className="edit-field">
@@ -226,6 +233,12 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
   const [autoMode,      setAutoMode]      = useState(false);
   const autoTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  useEffect(() => {
+    if (!isOpen || !videoRef.current || !streamRef.current) return;
+    videoRef.current.srcObject = streamRef.current;
+    void videoRef.current.play().catch(() => setCamError("تعذّر تشغيل معاينة الكاميرا."));
+  }, [isOpen]);
+
   const startCamera = async () => {
     setCamError(null);
     setSnapPreview(null);
@@ -234,10 +247,6 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
         video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
       setIsOpen(true);
     } catch {
       setCamError("تعذّر الوصول للكاميرا. تأكد من منح الإذن في إعدادات المتصفح.");
@@ -317,7 +326,11 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
     setAutoMode(true);
     autoTimerRef.current = setInterval(() => {
       const img = captureFrame();
-      if (img) onCapture(img);
+      if (img) {
+        if (autoTimerRef.current) clearInterval(autoTimerRef.current);
+        setAutoMode(false);
+        onCapture(img);
+      }
     }, 3000);
   };
 
@@ -692,7 +705,7 @@ function generateInvoiceHTML(
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:center">${qty}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:left">${price > 0 ? fmt(price) : "—"} ${currency.symbol}</td>
         <td style="padding:10px 12px;font-size:13px;font-weight:700;color:#0f172a;text-align:left">${totalP > 0 ? fmt(totalP) : "—"} ${currency.symbol}</td>
-        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${p.barcode || "—"}</td>` : ""}
+        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${p.barcode_serial || "—"}</td>` : ""}
       </tr>`;
   }).join("");
 
@@ -855,7 +868,8 @@ function InvoiceModal({
   };
 
   const handleGenerate = () => {
-    const html = generateInvoiceHTML(info, products, currency);
+    const safeInfo = { ...info, taxPercent: Math.min(100, Math.max(0, Number(info.taxPercent) || 0)), discountPercent: Math.min(100, Math.max(0, Number(info.discountPercent) || 0)) };
+    const html = generateInvoiceHTML(safeInfo, products, currency);
     const win = window.open("", "_blank");
     if (win) { win.document.write(html); win.document.close(); }
   };
@@ -1113,47 +1127,30 @@ export default function InventoryScannerPage() {
 
   const handleExport = async () => {
     if (!result || result.products.length === 0) return;
-
-    if (!spreadsheetId.trim()) {
-      setShowSettings(true);
-      setError("الرجاء إدخال رابط أو ID ملف Google Sheets أولاً من الإعدادات");
-      return;
-    }
-
     setExporting(true);
     setError(null);
-
     try {
       const res = await fetch("/api/sheets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          spreadsheetId: spreadsheetId.trim(),
-          products: result.products,
-        }),
+        body: JSON.stringify({ exportType: "excel", products: result.products, invoiceTitle: "تقرير جرد المخزون", currency: currency.code }),
       });
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON from /api/sheets:", rawText.substring(0, 300));
-        throw new Error(`خطأ من الخادم (${res.status}). تحقق من إعداد Google Sheets API.`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `فشل إنشاء ملف Excel (${res.status})`);
       }
-
-      let data: { success: boolean; error?: string; detail?: string };
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد خادم الجداول");
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? data.detail ?? `فشل التصدير (${res.status})`);
-      }
-
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `inventory-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
       setExportSuccess(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بخدمة الجداول");
+      setError(err instanceof Error ? err.message : "حدث خطأ أثناء تصدير ملف Excel");
     } finally {
       setExporting(false);
     }
@@ -1170,12 +1167,19 @@ export default function InventoryScannerPage() {
 
   const handleAddProduct = useCallback(() => {
     const newItem: ProductItem = {
+      id: Date.now(),
       product_name: "منتج جديد",
       brand: "",
       category: "",
-      unit_price: "",
+      unit_price: null,
       quantity: 1,
-      barcode: "",
+      barcode_serial: "",
+      fallback_level: 5,
+      detection_method: "visual_match",
+      confidence_score: 0.5,
+      image_region: "unknown",
+      is_estimated: false,
+      compliance_flags: [],
       confidence: "high",
       notes: "تمت الإضافة يدوياً",
     };
@@ -1486,8 +1490,8 @@ export default function InventoryScannerPage() {
                 {exportSuccess ? (
                   <div className="export-success">
                     <div className="export-success-icon">🎉</div>
-                    <div className="export-success-text">تم الترحيل بنجاح!</div>
-                    <div className="export-success-sub">{result.total_products_detected} منتج تم إضافته إلى Google Sheets</div>
+                    <div className="export-success-text">تم إنشاء ملف Excel بنجاح!</div>
+                    <div className="export-success-sub">{result.total_products_detected} منتج تم تضمينها في ملف Excel</div>
                     {spreadsheetId && (
                       <button className="btn btn-primary" style={{ marginTop: "1rem", width: "auto", fontSize: "0.85rem" }} onClick={() => window.open(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`, "_blank")}>
                         📄 فتح جدول البيانات
@@ -1503,7 +1507,7 @@ export default function InventoryScannerPage() {
                       </div>
                     )}
                     <button className="btn btn-export" onClick={handleExport} disabled={exporting || result.products.length === 0}>
-                      {exporting ? "⏳ جاري الترحيل..." : `📊 تأكيد الترحيل إلى Google Sheets (${result.total_products_detected} منتج)`}
+                      {exporting ? "⏳ جاري الترحيل..." : `📊 تنزيل تقرير Excel (${result.total_products_detected} منتج)`}
                     </button>
                     <button className="btn btn-secondary" style={{ width: "100%", justifyContent: "center", marginTop: "0.6rem", padding: "0.85rem", background: "rgba(99,102,241,0.1)", borderColor: "rgba(99,102,241,0.3)", color: "#a5b4fc", fontSize: "0.9rem" }} onClick={() => setShowInvoice(true)} disabled={result.products.length === 0}>
                       🧾 إنشاء فاتورة احترافية PDF
