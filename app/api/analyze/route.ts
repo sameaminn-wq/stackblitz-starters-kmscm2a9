@@ -315,10 +315,17 @@ async function convertAndOptimizeImage(
   }
   
   try {
-    let sharpInstance = sharp(buffer);
+    let sharpInstance = sharp(buffer, { limitInputPixels: 40_000_000 });
     
     // تغيير الحجم إذا كان كبيراً
     const metadata = await sharpInstance.metadata();
+    const supportedDecodedFormats = new Set(["jpeg", "png", "webp", "gif", "bmp", "tiff", "heif"]);
+    if (!metadata.format || !supportedDecodedFormats.has(metadata.format)) {
+      throw new Error("Unsupported decoded image format");
+    }
+    if (metadata.width && metadata.height && metadata.width * metadata.height > 40_000_000) {
+      throw new Error("Image dimensions exceed the pixel limit");
+    }
     if (metadata.width && metadata.height) {
       if (metadata.width > maxWidth || metadata.height > maxHeight) {
         sharpInstance = sharpInstance.resize(maxWidth, maxHeight, {
@@ -1317,6 +1324,7 @@ export async function POST(request: NextRequest) {
     business_type: sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
     analysis_quality: analysisQuality,
     detected_items_count: products.length,
+    total_products_detected: products.length,
     products: products.map(p => ({
       ...p,
       _editable_fields: ["quantity", "unit_price", "product_name", "notes"]
@@ -1408,7 +1416,7 @@ export async function GET(request: NextRequest) {
       deduplication: true,
       exponential_backoff: true,
       arabic_first: true,
-      zero_hallucination: true,
+      zero_hallucination: false,
       manual_editing_support: true,
       all_image_formats: true,
       auto_image_conversion: true,
