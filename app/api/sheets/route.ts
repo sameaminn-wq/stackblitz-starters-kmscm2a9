@@ -158,7 +158,8 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
  */
 async function generateExcelReport(products: ProductItem[], exportDetails: ExportRequest): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet(exportDetails.invoiceTitle || "تقرير جرد المخزون");
+  const sheetName = (exportDetails.invoiceTitle || "تقرير جرد المخزون").replace(/[:\\/?*\[\]]/g, " ").slice(0, 31) || "Inventory";
+  const worksheet = workbook.addWorksheet(sheetName);
 
   // إضافة رأس التقرير
   worksheet.mergeCells("A1:J1");
@@ -247,7 +248,15 @@ export async function POST(request: NextRequest) {
     if (Buffer.byteLength(rawBody, "utf8") > 5 * 1024 * 1024) {
       return NextResponse.json({ success: false, error: "حجم طلب التصدير يتجاوز الحد المسموح." }, { status: 413 });
     }
-    const payload = JSON.parse(rawBody) as ExportRequest & { exportType?: string };
+    let payload: ExportRequest & { exportType?: string };
+    try {
+      payload = JSON.parse(rawBody) as ExportRequest & { exportType?: string };
+    } catch {
+      return NextResponse.json({ success: false, error: "بيانات التصدير ليست JSON صالحاً." }, { status: 400 });
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return NextResponse.json({ success: false, error: "بيانات التصدير غير صالحة." }, { status: 400 });
+    }
     const { products, exportType, invoiceTitle, invoiceNumber, customerName, currency } = payload;
 
     // 1. التحقق من صحة المنتجات المدخلة (Input Validation)
