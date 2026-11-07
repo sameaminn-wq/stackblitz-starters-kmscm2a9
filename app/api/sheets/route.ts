@@ -48,7 +48,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
   const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fallbackFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 
-  const page = pdfDoc.addPage([842, 595]);
+  let page = pdfDoc.addPage([842, 595]);
 
   const { width, height } = page.getSize();
   let y = height - 50;
@@ -123,7 +123,7 @@ async function generatePdfReport(products: ProductItem[], exportDetails: ExportR
     y -= 20;
 
     if (y < margin) {
-      page.addPage();
+      page = pdfDoc.addPage([842, 595]);
       y = height - margin;
       // إعادة رسم رأس الجدول للصفحة الجديدة
       x = margin;
