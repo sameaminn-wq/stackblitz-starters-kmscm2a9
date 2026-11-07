@@ -1059,15 +1059,12 @@ export default function InventoryScannerPage() {
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
-  const [spreadsheetId, setSpreadsheetId] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [currency, setCurrency] = useState<Currency>(CURRENCIES[0]);
   const [showInvoice, setShowInvoice] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
-    const saved = localStorage.getItem("inv_spreadsheet_id");
-    if (saved) setSpreadsheetId(saved);
     const savedCurrency = localStorage.getItem("inv_currency");
     if (savedCurrency) {
       const found = CURRENCIES.find((c) => c.code === savedCurrency);
@@ -1178,9 +1175,6 @@ export default function InventoryScannerPage() {
   };
 
   const handleSaveSettings = () => {
-    const id = spreadsheetId.trim();
-    if (!id) return;
-    localStorage.setItem("inv_spreadsheet_id", id);
     localStorage.setItem("inv_currency", currency.code);
     setShowSettings(false);
     setError(null);
@@ -1353,7 +1347,7 @@ export default function InventoryScannerPage() {
         <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
           <div className="settings-modal">
             <div className="settings-title">⚙️ الإعدادات</div>
-            <div className="settings-sub">اضبط عملة الأسعار ورابط Google Sheets الخاص بك</div>
+            <div className="settings-sub">اختر العملة المستخدمة في عرض التقارير والفواتير</div>
 
             <label className="settings-label">العملة</label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", marginBottom: "1rem", maxHeight: "180px", overflowY: "auto", padding: "2px" }}>
@@ -1381,24 +1375,8 @@ export default function InventoryScannerPage() {
               <span>العملة المختارة: <strong style={{ color: "#60a5fa" }}>{currency.name} ({currency.symbol})</strong></span>
             </div>
 
-            <label className="settings-label">Spreadsheet ID</label>
-            <input
-              className="settings-input"
-              placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-              value={spreadsheetId}
-              onChange={(e) => setSpreadsheetId(e.target.value)}
-              dir="ltr"
-            />
-
-            <div className="settings-hint">
-              📌 مثال على الرابط:<br />
-              <span style={{ color: "#475569" }}>docs.google.com/spreadsheets/d/</span>
-              <span style={{ color: "#60a5fa", fontFamily: "monospace" }}>1BxiMVs0XRA...</span>
-              <span style={{ color: "#475569" }}>/edit</span>
-            </div>
-
             <div className="settings-actions">
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSaveSettings} disabled={!spreadsheetId.trim()}>
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSaveSettings}>
                 💾 حفظ الإعدادات
               </button>
               <button className="btn btn-secondary" onClick={() => setShowSettings(false)}>إلغاء</button>
@@ -1431,7 +1409,6 @@ export default function InventoryScannerPage() {
             </span>
             <div className="settings-btn-wrap">
               <button className="btn-settings-icon" onClick={() => setShowSettings(true)} title="الإعدادات">⚙️</button>
-              {spreadsheetId && <span className="has-id-dot" />}
             </div>
           </div>
         </header>
@@ -1513,20 +1490,9 @@ export default function InventoryScannerPage() {
                     <div className="export-success-icon">🎉</div>
                     <div className="export-success-text">تم إنشاء ملف Excel بنجاح!</div>
                     <div className="export-success-sub">{result.total_products_detected} منتج تم تضمينها في ملف Excel</div>
-                    {spreadsheetId && (
-                      <button className="btn btn-primary" style={{ marginTop: "1rem", width: "auto", fontSize: "0.85rem" }} onClick={() => window.open(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`, "_blank")}>
-                        📄 فتح جدول البيانات
-                      </button>
-                    )}
                   </div>
                 ) : (
                   <>
-                    {!spreadsheetId && (
-                      <div style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: "12px", padding: "0.7rem 1rem", marginBottom: "0.75rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-                        <span style={{ fontSize: "0.78rem", color: "#d97706" }}>⚠️ لم تُضف رابط Google Sheets بعد</span>
-                        <button className="btn btn-secondary" style={{ fontSize: "0.73rem", padding: "0.35rem 0.8rem", flexShrink: 0 }} onClick={() => setShowSettings(true)}>إضافة الآن ⚙️</button>
-                      </div>
-                    )}
                     <button className="btn btn-export" onClick={handleExport} disabled={exporting || result.products.length === 0}>
                       {exporting ? "⏳ جاري الترحيل..." : `📊 تنزيل تقرير Excel (${result.total_products_detected} منتج)`}
                     </button>
