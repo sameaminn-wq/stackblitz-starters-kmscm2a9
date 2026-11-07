@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // Types (متوافقة مع الـ API Route)
 // ============================================================
 type Confidence = "high" | "medium" | "low";
-type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
+type AnalysisQuality = "excellent" | "good" | "fair" | "poor" | "partial" | "failed";
 
 interface ProductItem {
   id?: number;
@@ -53,6 +53,8 @@ function QualityBar({ quality }: { quality: AnalysisQuality }) {
   const map: Record<AnalysisQuality, { label: string; width: string; color: string }> = {
     excellent: { label: "ممتاز", width: "100%", color: "#10b981" },
     good: { label: "جيد", width: "75%", color: "#3b82f6" },
+    fair: { label: "مقبول", width: "55%", color: "#f59e0b" },
+    poor: { label: "ضعيف", width: "25%", color: "#ef4444" },
     partial: { label: "جزئي", width: "45%", color: "#f59e0b" },
     failed: { label: "فشل", width: "10%", color: "#ef4444" },
   };
@@ -123,7 +125,7 @@ function ProductCard({
         {item.barcode_serial && (
           <div className="quick-stat">
             <span className="qs-label">باركود</span>
-            <span className="qs-value barcode">{item.barcode}</span>
+            <span className="qs-value barcode">{item.barcode_serial}</span>
           </div>
         )}
       </div>
@@ -1126,7 +1128,12 @@ export default function InventoryScannerPage() {
     setResult((prev) => {
       if (!prev) return prev;
       const updated = [...prev.products];
-      updated[idx] = { ...updated[idx], [field]: value };
+      const normalizedValue: string | number | null = field === "quantity"
+        ? Math.max(0, Math.floor(Number(value) || 0))
+        : field === "unit_price"
+          ? (value.trim() === "" ? null : Math.max(0, Number(value) || 0))
+          : value;
+      updated[idx] = { ...updated[idx], [field]: normalizedValue } as ProductItem;
       return { ...prev, products: updated, total_products_detected: updated.length };
     });
   }, []);
