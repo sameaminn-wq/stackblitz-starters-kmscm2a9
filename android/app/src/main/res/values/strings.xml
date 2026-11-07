@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name"> Lamha AI Smart Inventory</string>
+    <string name="title_activity_main"> Lamha AI Smart Inventory</string>
+    <string name="package_name">com.lamha.inventory</string>
+    <string name="custom_url_scheme">com.lamha.inventory</string>
+</resources>

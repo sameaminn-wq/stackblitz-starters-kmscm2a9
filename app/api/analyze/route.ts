@@ -8,8 +8,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from 'sharp'; // أضف: npm install sharp
-import type { ProductItem, Confidence } from "../../../types"; 
+import type { ProductItem, Confidence } from "../../../types";
+
 // تذكر: 3 مرات ../ لكي تخرج من (analyze ثم api ثم app) وتصل للجذر
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: CORS_HEADERS,
+  });
+}
 
 // ──────────────────────────────────────────────────────────────
 // 1. CONFIGURATION
@@ -113,7 +126,7 @@ const CURRENCY_DB: Record<string, CurrencyInfo> = {
   AU: { code: "AUD", symbol: "$",  nameEn: "Australian Dollar",    nameAr: "دولار أسترالي",         exchangeRateToUSD: 0.66  },
   BR: { code: "BRL", symbol: "R$", nameEn: "Brazilian Real",       nameAr: "ريال برازيلي",          exchangeRateToUSD: 5.15  },
   MX: { code: "MXN", symbol: "$",  nameEn: "Mexican Peso",         nameAr: "بيزو مكسيكي",           exchangeRateToUSD: 17.2  },
-  ZA: { code: "ZAR", symbol: "R",  nameEn: "South African Rand",   nameAr: "راند جنوب أفريقي",      exchangeRateToUSD: 18.7  },
+  ZA: { code: "ZAR", symbol: "R",  nameEn: "South African Rand",   nameAr: "راند جنوب أفريقى",      exchangeRateToUSD: 18.7  },
   NG: { code: "NGN", symbol: "₦",  nameEn: "Nigerian Naira",       nameAr: "نايرا نيجيري",          exchangeRateToUSD: 1480  },
   MY: { code: "MYR", symbol: "RM", nameEn: "Malaysian Ringgit",    nameAr: "رينغيت ماليزي",         exchangeRateToUSD: 4.73  },
   ID: { code: "IDR", symbol: "Rp", nameEn: "Indonesian Rupiah",    nameAr: "روبية إندونيسية",       exchangeRateToUSD: 16000 },
@@ -246,7 +259,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: any = null;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -420,19 +433,19 @@ function extractJSON<T>(raw: string): T {
   } catch (firstError) {
     // محاولة إصلاح الأخطاء الشائعة
     const fixed = text
-      .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":')
-      .replace(/:\s*'([^']*)'/g, ':"$1"')
+      .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"\$2":')
+      .replace(/:\s*'([^']*)'/g, ':"\$1"')
       .replace(/,\s*}/g, '}')
       .replace(/,\s*]/g, ']')
       .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
     
-    try {
-      return JSON.parse(fixed);
-    } catch (secondError) {
-      console.error("[JSON] Failed to parse:", text.substring(0, 200));
-      throw new Error(`Invalid JSON format: ${firstError.message}`);
-    }
-  }
+      try {
+        return JSON.parse(fixed);
+      } catch (secondError) {
+        console.error("[JSON] Failed to parse:", text.substring(0, 200));
+        // التعديل هنا: نستخدم string لضمان قبول أي نوع من الأخطاء
+        throw new Error(`Invalid JSON format: ${String(firstError)}`);
+      }}
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1099,6 +1112,10 @@ function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
 }
 
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+// OPTIONS HANDLER (مطلوب للموبايل - Preflight CORS)
+// ──────────────────────────────────────────────────────────────
+
 // 17. POST HANDLER (الدالة الرئيسية)
 // ──────────────────────────────────────────────────────────────
 
@@ -1108,7 +1125,7 @@ export async function POST(request: NextRequest) {
   if (!process.env.GEMINI_API_KEY?.trim()) {
     return NextResponse.json(
       { success: false, error: "مفتاح Gemini API غير موجود" },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 
@@ -1116,7 +1133,7 @@ export async function POST(request: NextRequest) {
   if (contentLen > MAX_BODY_BYTES) {
     return NextResponse.json(
       { success: false, error: `حجم الطلب كبير جداً. الحد الأقصى ${MAX_BODY_BYTES / 1e6}MB.` },
-      { status: 413 }
+      { status: 413, headers: CORS_HEADERS }
     );
   }
 
@@ -1131,7 +1148,7 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json(
       { success: false, error: "الطلب غير صالح — يجب أن يكون JSON." },
-      { status: 400 }
+      { status: 400, headers: CORS_HEADERS }
     );
   }
 
@@ -1140,7 +1157,7 @@ export async function POST(request: NextRequest) {
   if (!image || typeof image !== "string") {
     return NextResponse.json(
       { success: false, error: "لم يُرسل حقل `image` في الطلب." },
-      { status: 400 }
+      { status: 400, headers: CORS_HEADERS }
     );
   }
 
@@ -1152,7 +1169,7 @@ export async function POST(request: NextRequest) {
   if (!validateBase64(base64)) {
     return NextResponse.json(
       { success: false, error: "صيغة الصورة غير صالحة." },
-      { status: 400 }
+      { status: 400, headers: CORS_HEADERS }
     );
   }
 
@@ -1165,8 +1182,11 @@ export async function POST(request: NextRequest) {
   } catch (convError) {
     console.error("[IMAGE] Conversion failed:", convError);
     return NextResponse.json(
-      { success: false, error: "نوع الصورة غير مدعوم أو تالف." },
-      { status: 400 }
+      { success: false, error: "نوع الصورة غير مدعوم +++ أو الملف تالف." },
+      { 
+        status: 200, 
+        headers: CORS_HEADERS // هذا هو الإضافة السحرية التي تمنع الانهيار
+      }
     );
   }
 
@@ -1174,7 +1194,7 @@ export async function POST(request: NextRequest) {
   if (imageBytes > MAX_IMAGE_BYTES) {
     return NextResponse.json(
       { success: false, error: `حجم الصورة يتجاوز ${MAX_IMAGE_SIZE_MB}MB بعد التحسين.` },
-      { status: 413 }
+      { status: 413, headers: CORS_HEADERS }
     );
   }
 
@@ -1219,13 +1239,13 @@ export async function POST(request: NextRequest) {
     if (err?.status === 429) {
       return NextResponse.json(
         { success: false, error: "تم تجاوز حد الاستخدام. انتظر وأعد المحاولة.", retry_after: 60 },
-        { status: 429 }
+        { status: 429, headers: CORS_HEADERS }
       );
     }
 
     return NextResponse.json(
       { success: false, error: "فشل تحليل الصورة. تأكد من وضوحها." },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 
@@ -1343,8 +1363,10 @@ export async function POST(request: NextRequest) {
     },
   };
 
-  return NextResponse.json(response);
-}
+  return NextResponse.json(response, {
+    status: 200,
+    headers: CORS_HEADERS,
+  });}
 
 // ──────────────────────────────────────────────────────────────
 // 18. GET HANDLER

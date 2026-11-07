@@ -1,0 +1,8 @@
+{
+  "name": "Lamha AI Smart Inventory",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular",
+  "id": "0e613729"
+}
