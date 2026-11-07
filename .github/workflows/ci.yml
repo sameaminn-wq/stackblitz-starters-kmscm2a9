@@ -42,7 +42,6 @@ jobs:
           NODE
       - name: Audit dependencies
         run: npm audit
-        continue-on-error: true
       - name: Lint
         run: npm run lint
       - name: Type-check
