@@ -671,6 +671,12 @@ interface InvoiceInfo {
   showBarcode: boolean;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char] as string));
+}
+
 function generateInvoiceHTML(
   info: InvoiceInfo,
   products: ProductItem[],
@@ -699,13 +705,13 @@ function generateInvoiceHTML(
     return `
       <tr style="border-bottom:1px solid #e2e8f0;${i % 2 === 1 ? "background:#f8fafc;" : ""}">
         <td style="padding:10px 12px;font-size:13px;color:#1e293b">${i + 1}</td>
-        <td style="padding:10px 12px;font-size:13px;color:#1e293b;font-weight:600">${p.product_name || "—"}</td>
-        <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.brand || "—"}</td>
-        <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.category || "—"}</td>
+        <td style="padding:10px 12px;font-size:13px;color:#1e293b;font-weight:600">${escapeHtml(p.product_name || "—")}</td>
+        <td style="padding:10px 12px;font-size:12px;color:#64748b">${escapeHtml(p.brand || "—")}</td>
+        <td style="padding:10px 12px;font-size:12px;color:#64748b">${escapeHtml(p.category || "—")}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:center">${qty}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:left">${price > 0 ? fmt(price) : "—"} ${currency.symbol}</td>
         <td style="padding:10px 12px;font-size:13px;font-weight:700;color:#0f172a;text-align:left">${totalP > 0 ? fmt(totalP) : "—"} ${currency.symbol}</td>
-        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${p.barcode_serial || "—"}</td>` : ""}
+        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${escapeHtml(p.barcode_serial || "—")}</td>` : ""}
       </tr>`;
   }).join("");
 
@@ -714,7 +720,7 @@ function generateInvoiceHTML(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>فاتورة ${invNum}</title>
+<title>فاتورة ${escapeHtml(invNum)}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}
@@ -756,14 +762,14 @@ function generateInvoiceHTML(
 <div class="page">
   <div class="header">
     <div class="company-info">
-      ${info.companyLogo ? `<img src="${info.companyLogo}" style="height:50px;margin-bottom:12px;border-radius:6px" alt="logo"/>` : ""}
-      <h1>${info.companyName || "الشركة"}</h1>
+      ${info.companyLogo ? `<img src="${escapeHtml(info.companyLogo)}" style="height:50px;margin-bottom:12px;border-radius:6px" alt="logo"/>` : ""}
+      <h1>${escapeHtml(info.companyName || "الشركة")}</h1>
       <p>نظام الجرد الذكي · AI Inventory</p>
     </div>
     <div class="invoice-badge">
       <div class="label">فاتورة رقم</div>
-      <div class="num">${invNum}</div>
-      <div class="date">📅 ${invDate}</div>
+      <div class="num">${escapeHtml(invNum)}</div>
+      <div class="date">📅 ${escapeHtml(invDate)}</div>
     </div>
   </div>
 
@@ -771,9 +777,9 @@ function generateInvoiceHTML(
     <div class="client-section">
       <div class="info-block">
         <h3>فاتورة إلى</h3>
-        <p class="name">${info.clientName || "العميل"}</p>
-        ${info.clientPhone ? `<p>📞 ${info.clientPhone}</p>` : ""}
-        ${info.clientAddress ? `<p>📍 ${info.clientAddress}</p>` : ""}
+        <p class="name">${escapeHtml(info.clientName || "العميل")}</p>
+        ${info.clientPhone ? `<p>📞 ${escapeHtml(info.clientPhone)}</p>` : ""}
+        ${info.clientAddress ? `<p>📍 ${escapeHtml(info.clientAddress)}</p>` : ""}
       </div>
       <div class="info-block" style="text-align:left">
         <h3>ملخص</h3>
@@ -801,7 +807,7 @@ function generateInvoiceHTML(
 
     ${info.notes ? `
     <div class="notes-section">
-      <p><strong>ملاحظات:</strong> ${info.notes}</p>
+      <p><strong>ملاحظات:</strong> ${escapeHtml(info.notes)}</p>
     </div>` : ""}
 
     <div class="totals">
@@ -862,8 +868,16 @@ function InvoiceModal({
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2 * 1024 * 1024) {
+      set("companyLogo", "");
+      setError("الشعار يجب أن يكون PNG أو JPEG أو WebP وبحجم لا يتجاوز 2MB.");
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = (ev) => set("companyLogo", ev.target?.result as string);
+    reader.onload = (ev) => {
+      const value = ev.target?.result;
+      if (typeof value === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(value)) set("companyLogo", value);
+    };
     reader.readAsDataURL(file);
   };
 
