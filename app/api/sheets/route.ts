@@ -61,9 +61,9 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
 
   // رأس الجدول
   const headers = ["#", "اسم المنتج", "الماركة", "التصنيف", "الكمية", "سعر الوحدة", "الإجمالي", "الباركود", "الثقة", "ملاحظات"];
-  worksheet.addRow(headers);
-  worksheet.getRow(worksheet.lastRow.number).font = { name: "Arial", size: 12, bold: true };
-  worksheet.getRow(worksheet.lastRow.number).eachCell((cell) => {
+  const headerRow = worksheet.addRow(headers);
+  headerRow.font = { name: "Arial", size: 12, bold: true };
+  headerRow.eachCell((cell) => {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD3D3D3" } }; // رمادي فاتح
     cell.border = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
   });
@@ -102,7 +102,7 @@ async function generateExcelReport(products: ProductItem[], exportDetails: Expor
   // ضبط عرض الأعمدة
   worksheet.columns.forEach(column => {
     let maxLength = 0;
-    column.eachCell({ includeEmpty: true }, cell => {
+    column.eachCell?.({ includeEmpty: true }, cell => {
       const columnLength = cell.value ? cell.value.toString().length : 10;
       if (columnLength > maxLength) {
         maxLength = columnLength;
