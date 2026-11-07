@@ -850,6 +850,7 @@ function InvoiceModal({
   onClose: () => void;
 }) {
   const today = new Date().toISOString().split("T")[0];
+  const [logoError, setLogoError] = useState<string | null>(null);
   const [info, setInfo] = useState<InvoiceInfo>({
     clientName: "",
     clientPhone: "",
@@ -872,9 +873,10 @@ function InvoiceModal({
     if (!file) return;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2 * 1024 * 1024) {
       set("companyLogo", "");
-      setError("الشعار يجب أن يكون PNG أو JPEG أو WebP وبحجم لا يتجاوز 2MB.");
+      setLogoError("الشعار يجب أن يكون PNG أو JPEG أو WebP وبحجم لا يتجاوز 2MB.");
       return;
     }
+    setLogoError(null);
     const reader = new FileReader();
     reader.onload = (ev) => {
       const value = ev.target?.result;
@@ -952,6 +954,7 @@ function InvoiceModal({
               }}>
                 {info.companyLogo ? "✅ تم رفع الشعار" : "📁 رفع شعار"}
               </label>
+              {logoError && <p style={{ color: "#f87171", fontSize: "0.7rem" }}>{logoError}</p>}
               {info.companyLogo && (
                 <button onClick={() => set("companyLogo", "")} style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: "0.8rem" }}>حذف</button>
               )}
