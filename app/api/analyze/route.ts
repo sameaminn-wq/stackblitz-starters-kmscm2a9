@@ -1156,7 +1156,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { image, fetch_prices = true, country_override } = body;
+  const { image, fetch_prices = false, country_override } = body;
 
   if (!image || typeof image !== "string") {
     return NextResponse.json(
@@ -1167,8 +1167,12 @@ export async function POST(request: NextRequest) {
 
   const ctx = await resolveGeoContext(request, country_override);
 
-  // معالجة الصورة الأولية
+  // معالجة الصورة الأولية مع السماح بصيغ الصور النقطية فقط.
   let { base64, mimeType } = processImageInput(image);
+  const allowedRasterTypes = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/tif", "image/heic", "image/heif", "image/avif"]);
+  if (!allowedRasterTypes.has(mimeType.toLowerCase())) {
+    return NextResponse.json({ success: false, error: "نوع الصورة غير مدعوم." }, { status: 415 });
+  }
 
   if (!validateBase64(base64)) {
     return NextResponse.json(
@@ -1356,7 +1360,7 @@ export async function POST(request: NextRequest) {
         original_format: mimeType
       },
       supported_features: {
-        all_image_formats: true,
+        all_image_formats: false,
         auto_conversion: true,
         price_caching: true,
         quality_analysis: !!qualityAnalysis
@@ -1389,7 +1393,7 @@ export async function GET(request: NextRequest) {
     },
     features: {
       auto_geo_detection: true,
-      live_market_prices: true,
+      live_market_prices: false,
       batch_price_fetching: true,
       deduplication: true,
       exponential_backoff: true,
@@ -1403,7 +1407,7 @@ export async function GET(request: NextRequest) {
     },
     supported_image_formats: [
       "JPEG", "PNG", "WebP", "GIF", "BMP", 
-      "TIFF", "HEIC", "HEIF", "AVIF", "SVG"
+      "TIFF", "HEIC", "HEIF", "AVIF"
     ],
     detected_context: {
       country: ctx.countryNameEn,
