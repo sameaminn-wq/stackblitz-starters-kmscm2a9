@@ -693,6 +693,11 @@ Be strict: only return valid JSON, no other text.`;
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
+  const batch_id = `batch-${Date.now()}`;
+  const image_id = `image-${Date.now()}`;
+  const timestamp = new Date().toISOString();
+  const previous_scan_context = "غير متاح — لا توجد جلسة سابقة مرفقة";
+  const planogram_reference = "غير متاح — لا توجد خطة رف مرفقة";
   const lang       = ctx.lang === "ar" ? "العربية الفصحى" : "English";
   const currency   = ctx.currency.code;
   const symbol     = ctx.currency.symbol;
@@ -1077,24 +1082,40 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 // 16. PRODUCT SANITIZER
 // ──────────────────────────────────────────────────────────────
 
-function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
+function sanitizeProduct(raw: any, lang: "ar" | "en", index: number): ProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
-
   const confidence: Confidence =
-    ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
+    ["high", "medium", "low"].includes(raw?.confidence) ? raw.confidence : "medium";
+  const rawQuantity = typeof raw?.visible_quantity === "number"
+    ? raw.visible_quantity
+    : typeof raw?.quantity === "number" ? raw.quantity : 0;
+  const confidenceScore = typeof raw?.confidence_score === "number" && Number.isFinite(raw.confidence_score)
+    ? Math.max(0, Math.min(1, raw.confidence_score))
+    : confidence === "high" ? 0.9 : confidence === "medium" ? 0.7 : 0.4;
+  const fallback = Number.isInteger(raw?.fallback_level) && raw.fallback_level >= 1 && raw.fallback_level <= 5
+    ? raw.fallback_level : 5;
+  const detection = ["ocr_only", "visual_match", "barcode_match", "multimodal_match"].includes(raw?.detection_method)
+    ? raw.detection_method : "multimodal_match";
 
   return {
-    product_name:   sanitize(raw.product_name || unknownLabel, 300),
-    brand:          raw.brand ? sanitize(raw.brand, 150) : null,
-    category:       sanitize(raw.category || generalLabel, 150),
-    unit_price:     null,
-    quantity:       typeof raw.quantity === "number" && raw.quantity > 0
-                      ? Math.floor(raw.quantity)
-                      : 1,
-    barcode_serial: raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
+    id: index,
+    product_name: sanitize(raw?.product_name || unknownLabel, 300),
+    brand: raw?.brand ? sanitize(raw.brand, 150) : null,
+    category: sanitize(raw?.category || generalLabel, 150),
+    unit_price: null,
+    quantity: Number.isFinite(rawQuantity) && rawQuantity >= 0 ? Math.floor(rawQuantity) : 0,
+    barcode_serial: raw?.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
     confidence,
-    notes:          sanitize(raw.notes || "", 800),
+    notes: sanitize(raw?.notes || "", 800),
+    fallback_level: fallback,
+    detection_method: detection,
+    confidence_score: confidenceScore,
+    image_region: sanitize(raw?.image_region || "unknown", 40),
+    is_estimated: raw?.quantity_is_estimated === true || raw?.is_estimated === true,
+    compliance_flags: Array.isArray(raw?.compliance_flags)
+      ? raw.compliance_flags.filter((flag: unknown) => typeof flag === "string").slice(0, 20).map((flag: string) => sanitize(flag, 80))
+      : [],
   };
 }
 
@@ -1231,7 +1252,7 @@ export async function POST(request: NextRequest) {
 
   // تنقية المنتجات
   const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
-  let products: ProductItem[] = rawProducts.map(p => sanitizeProduct(p, ctx.lang));
+  let products: ProductItem[] = rawProducts.map((p, index) => sanitizeProduct(p, ctx.lang, index + 1));
 
   // جلب الأسعار
   let pricesFetched = false;
