@@ -1,23 +1,29 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-// تأكد أيضاً من استيراد useEffect إذا كنت تستخدم isMounted
 
 // ============================================================
 // Types (متوافقة مع الـ API Route)
 // ============================================================
 type Confidence = "high" | "medium" | "low";
-type AnalysisQuality = "excellent" | "good" | "partial" | "failed";
+type AnalysisQuality = "excellent" | "good" | "fair" | "poor" | "partial" | "failed";
 
 interface ProductItem {
+  id?: number;
   product_name: string;
-  brand: string;
+  brand: string | null;
   category: string;
-  unit_price: string;
-  quantity: number | string;
-  barcode: string;
+  unit_price: number | null;
+  quantity: number;
+  barcode_serial: string | null;
   confidence: Confidence;
   notes: string;
+  fallback_level?: 1 | 2 | 3 | 4 | 5;
+  detection_method?: "ocr_only" | "visual_match" | "barcode_match" | "multimodal_match";
+  confidence_score?: number;
+  image_region?: string;
+  is_estimated?: boolean;
+  compliance_flags?: string[];
 }
 
 interface AnalysisResult {
@@ -46,6 +52,8 @@ function QualityBar({ quality }: { quality: AnalysisQuality }) {
   const map: Record<AnalysisQuality, { label: string; width: string; color: string }> = {
     excellent: { label: "ممتاز", width: "100%", color: "#10b981" },
     good: { label: "جيد", width: "75%", color: "#3b82f6" },
+    fair: { label: "مقبول", width: "55%", color: "#f59e0b" },
+    poor: { label: "ضعيف", width: "25%", color: "#ef4444" },
     partial: { label: "جزئي", width: "45%", color: "#f59e0b" },
     failed: { label: "فشل", width: "10%", color: "#ef4444" },
   };
@@ -113,10 +121,10 @@ function ProductCard({
           <span className="qs-label">السعر</span>
           <span className="qs-value">{item.unit_price ? `${item.unit_price} ${currencySymbol}` : "—"}</span>
         </div>
-        {item.barcode && (
+        {item.barcode_serial && (
           <div className="quick-stat">
             <span className="qs-label">باركود</span>
-            <span className="qs-value barcode">{item.barcode}</span>
+            <span className="qs-value barcode">{item.barcode_serial}</span>
           </div>
         )}
       </div>
@@ -131,7 +139,7 @@ function ProductCard({
                 { key: "category", label: "التصنيف" },
                 { key: "unit_price", label: "السعر" },
                 { key: "quantity", label: "الكمية" },
-                { key: "barcode", label: "الباركود" },
+                { key: "barcode_serial", label: "الباركود" },
               ] as { key: keyof ProductItem; label: string }[]
             ).map(({ key, label }) => (
               <div key={key} className="edit-field">
@@ -226,6 +234,12 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
   const [autoMode,      setAutoMode]      = useState(false);
   const autoTimerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  useEffect(() => {
+    if (!isOpen || !videoRef.current || !streamRef.current) return;
+    videoRef.current.srcObject = streamRef.current;
+    void videoRef.current.play().catch(() => setCamError("تعذّر تشغيل معاينة الكاميرا."));
+  }, [isOpen]);
+
   const startCamera = async () => {
     setCamError(null);
     setSnapPreview(null);
@@ -234,10 +248,6 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
         video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } },
       });
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
       setIsOpen(true);
     } catch {
       setCamError("تعذّر الوصول للكاميرا. تأكد من منح الإذن في إعدادات المتصفح.");
@@ -317,7 +327,11 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
     setAutoMode(true);
     autoTimerRef.current = setInterval(() => {
       const img = captureFrame();
-      if (img) onCapture(img);
+      if (img) {
+        if (autoTimerRef.current) clearInterval(autoTimerRef.current);
+        setAutoMode(false);
+        onCapture(img);
+      }
     }, 3000);
   };
 
@@ -452,7 +466,7 @@ function VideoCapture({ onCapture, disabled }: { onCapture: (img: string) => voi
               display: "flex", alignItems: "center", gap: "5px",
             }}>
               <span style={{ animation: "pulse-rec 1s infinite" }}>●</span>
-              <span>جرد تلقائي كل 3ث</span>
+              <span>التقاط تلقائي بعد 3 ثوانٍ</span>
             </div>
           )}
 
@@ -658,6 +672,12 @@ interface InvoiceInfo {
   showBarcode: boolean;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char] as string));
+}
+
 function generateInvoiceHTML(
   info: InvoiceInfo,
   products: ProductItem[],
@@ -686,13 +706,13 @@ function generateInvoiceHTML(
     return `
       <tr style="border-bottom:1px solid #e2e8f0;${i % 2 === 1 ? "background:#f8fafc;" : ""}">
         <td style="padding:10px 12px;font-size:13px;color:#1e293b">${i + 1}</td>
-        <td style="padding:10px 12px;font-size:13px;color:#1e293b;font-weight:600">${p.product_name || "—"}</td>
-        <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.brand || "—"}</td>
-        <td style="padding:10px 12px;font-size:12px;color:#64748b">${p.category || "—"}</td>
+        <td style="padding:10px 12px;font-size:13px;color:#1e293b;font-weight:600">${escapeHtml(p.product_name || "—")}</td>
+        <td style="padding:10px 12px;font-size:12px;color:#64748b">${escapeHtml(p.brand || "—")}</td>
+        <td style="padding:10px 12px;font-size:12px;color:#64748b">${escapeHtml(p.category || "—")}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:center">${qty}</td>
         <td style="padding:10px 12px;font-size:13px;color:#1e293b;text-align:left">${price > 0 ? fmt(price) : "—"} ${currency.symbol}</td>
         <td style="padding:10px 12px;font-size:13px;font-weight:700;color:#0f172a;text-align:left">${totalP > 0 ? fmt(totalP) : "—"} ${currency.symbol}</td>
-        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${p.barcode || "—"}</td>` : ""}
+        ${info.showBarcode ? `<td style="padding:10px 12px;font-size:11px;color:#94a3b8;font-family:monospace">${escapeHtml(p.barcode_serial || "—")}</td>` : ""}
       </tr>`;
   }).join("");
 
@@ -701,7 +721,7 @@ function generateInvoiceHTML(
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>فاتورة ${invNum}</title>
+<title>فاتورة ${escapeHtml(invNum)}</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
   *{box-sizing:border-box;margin:0;padding:0}
@@ -743,14 +763,14 @@ function generateInvoiceHTML(
 <div class="page">
   <div class="header">
     <div class="company-info">
-      ${info.companyLogo ? `<img src="${info.companyLogo}" style="height:50px;margin-bottom:12px;border-radius:6px" alt="logo"/>` : ""}
-      <h1>${info.companyName || "الشركة"}</h1>
+      ${info.companyLogo ? `<img src="${escapeHtml(info.companyLogo)}" style="height:50px;margin-bottom:12px;border-radius:6px" alt="logo"/>` : ""}
+      <h1>${escapeHtml(info.companyName || "الشركة")}</h1>
       <p>نظام الجرد الذكي · AI Inventory</p>
     </div>
     <div class="invoice-badge">
       <div class="label">فاتورة رقم</div>
-      <div class="num">${invNum}</div>
-      <div class="date">📅 ${invDate}</div>
+      <div class="num">${escapeHtml(invNum)}</div>
+      <div class="date">📅 ${escapeHtml(invDate)}</div>
     </div>
   </div>
 
@@ -758,9 +778,9 @@ function generateInvoiceHTML(
     <div class="client-section">
       <div class="info-block">
         <h3>فاتورة إلى</h3>
-        <p class="name">${info.clientName || "العميل"}</p>
-        ${info.clientPhone ? `<p>📞 ${info.clientPhone}</p>` : ""}
-        ${info.clientAddress ? `<p>📍 ${info.clientAddress}</p>` : ""}
+        <p class="name">${escapeHtml(info.clientName || "العميل")}</p>
+        ${info.clientPhone ? `<p>📞 ${escapeHtml(info.clientPhone)}</p>` : ""}
+        ${info.clientAddress ? `<p>📍 ${escapeHtml(info.clientAddress)}</p>` : ""}
       </div>
       <div class="info-block" style="text-align:left">
         <h3>ملخص</h3>
@@ -788,7 +808,7 @@ function generateInvoiceHTML(
 
     ${info.notes ? `
     <div class="notes-section">
-      <p><strong>ملاحظات:</strong> ${info.notes}</p>
+      <p><strong>ملاحظات:</strong> ${escapeHtml(info.notes)}</p>
     </div>` : ""}
 
     <div class="totals">
@@ -829,13 +849,14 @@ function InvoiceModal({
   onClose: () => void;
 }) {
   const today = new Date().toISOString().split("T")[0];
+  const [logoError, setLogoError] = useState<string | null>(null);
   const [info, setInfo] = useState<InvoiceInfo>({
     clientName: "",
     clientPhone: "",
     clientAddress: "",
     companyName: "",
     companyLogo: "",
-    invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+    invoiceNumber: "",
     invoiceDate: today,
     notes: "",
     taxPercent: 0,
@@ -849,13 +870,23 @@ function InvoiceModal({
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2 * 1024 * 1024) {
+      set("companyLogo", "");
+      setLogoError("الشعار يجب أن يكون PNG أو JPEG أو WebP وبحجم لا يتجاوز 2MB.");
+      return;
+    }
+    setLogoError(null);
     const reader = new FileReader();
-    reader.onload = (ev) => set("companyLogo", ev.target?.result as string);
+    reader.onload = (ev) => {
+      const value = ev.target?.result;
+      if (typeof value === "string" && /^data:image\/(png|jpeg|webp);base64,/.test(value)) set("companyLogo", value);
+    };
     reader.readAsDataURL(file);
   };
 
   const handleGenerate = () => {
-    const html = generateInvoiceHTML(info, products, currency);
+    const safeInfo = { ...info, invoiceNumber: info.invoiceNumber.trim() || `INV-${Date.now().toString().slice(-6)}`, taxPercent: Math.min(100, Math.max(0, Number(info.taxPercent) || 0)), discountPercent: Math.min(100, Math.max(0, Number(info.discountPercent) || 0)) };
+    const html = generateInvoiceHTML(safeInfo, products, currency);
     const win = window.open("", "_blank");
     if (win) { win.document.write(html); win.document.close(); }
   };
@@ -922,6 +953,7 @@ function InvoiceModal({
               }}>
                 {info.companyLogo ? "✅ تم رفع الشعار" : "📁 رفع شعار"}
               </label>
+              {logoError && <p style={{ color: "#f87171", fontSize: "0.7rem" }}>{logoError}</p>}
               {info.companyLogo && (
                 <button onClick={() => set("companyLogo", "")} style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: "0.8rem" }}>حذف</button>
               )}
@@ -1022,26 +1054,21 @@ function InvoiceModal({
 // Main Component - هذه هي الصفحة الرئيسية
 // ============================================================
 export default function InventoryScannerPage() {
-  const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
-  const [spreadsheetId, setSpreadsheetId] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [currency, setCurrency] = useState<Currency>(CURRENCIES[0]);
   const [showInvoice, setShowInvoice] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
-    const saved = localStorage.getItem("inv_spreadsheet_id");
-    if (saved) setSpreadsheetId(saved);
     const savedCurrency = localStorage.getItem("inv_currency");
     if (savedCurrency) {
       const found = CURRENCIES.find((c) => c.code === savedCurrency);
-      if (found) setCurrency(found);
+      if (found) window.setTimeout(() => setCurrency(found), 0);
     }
   }, []);
 
@@ -1098,7 +1125,12 @@ export default function InventoryScannerPage() {
     setResult((prev) => {
       if (!prev) return prev;
       const updated = [...prev.products];
-      updated[idx] = { ...updated[idx], [field]: value };
+      const normalizedValue: string | number | null = field === "quantity"
+        ? Math.max(0, Math.floor(Number(value) || 0))
+        : field === "unit_price"
+          ? (value.trim() === "" ? null : Math.max(0, Number(value) || 0))
+          : value;
+      updated[idx] = { ...updated[idx], [field]: normalizedValue } as ProductItem;
       return { ...prev, products: updated, total_products_detected: updated.length };
     });
   }, []);
@@ -1113,56 +1145,36 @@ export default function InventoryScannerPage() {
 
   const handleExport = async () => {
     if (!result || result.products.length === 0) return;
-
-    if (!spreadsheetId.trim()) {
-      setShowSettings(true);
-      setError("الرجاء إدخال رابط أو ID ملف Google Sheets أولاً من الإعدادات");
-      return;
-    }
-
     setExporting(true);
     setError(null);
-
     try {
       const res = await fetch("/api/sheets", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          spreadsheetId: spreadsheetId.trim(),
-          products: result.products,
-        }),
+        body: JSON.stringify({ exportType: "excel", products: result.products, invoiceTitle: "تقرير جرد المخزون", currency: currency.code }),
       });
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!contentType.includes("application/json")) {
-        const rawText = await res.text();
-        console.error("Non-JSON from /api/sheets:", rawText.substring(0, 300));
-        throw new Error(`خطأ من الخادم (${res.status}). تحقق من إعداد Google Sheets API.`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `فشل إنشاء ملف Excel (${res.status})`);
       }
-
-      let data: { success: boolean; error?: string; detail?: string };
-      try {
-        data = await res.json();
-      } catch {
-        throw new Error("فشل في قراءة رد خادم الجداول");
-      }
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error ?? data.detail ?? `فشل التصدير (${res.status})`);
-      }
-
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `inventory-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
       setExportSuccess(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "خطأ غير متوقع في الاتصال بخدمة الجداول");
+      setError(err instanceof Error ? err.message : "حدث خطأ أثناء تصدير ملف Excel");
     } finally {
       setExporting(false);
     }
   };
 
   const handleSaveSettings = () => {
-    const id = spreadsheetId.trim();
-    if (!id) return;
-    localStorage.setItem("inv_spreadsheet_id", id);
     localStorage.setItem("inv_currency", currency.code);
     setShowSettings(false);
     setError(null);
@@ -1170,12 +1182,19 @@ export default function InventoryScannerPage() {
 
   const handleAddProduct = useCallback(() => {
     const newItem: ProductItem = {
+      id: Date.now(),
       product_name: "منتج جديد",
       brand: "",
       category: "",
-      unit_price: "",
+      unit_price: null,
       quantity: 1,
-      barcode: "",
+      barcode_serial: "",
+      fallback_level: 5,
+      detection_method: "visual_match",
+      confidence_score: 0.5,
+      image_region: "unknown",
+      is_estimated: false,
+      compliance_flags: [],
       confidence: "high",
       notes: "تمت الإضافة يدوياً",
     };
@@ -1206,8 +1225,6 @@ export default function InventoryScannerPage() {
   };
 
   const highConfidence = result?.products.filter((p) => p.confidence === "high").length ?? 0;
-
-  if (!isMounted) return null;
 
   return (
     <>
@@ -1328,7 +1345,7 @@ export default function InventoryScannerPage() {
         <div className="settings-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}>
           <div className="settings-modal">
             <div className="settings-title">⚙️ الإعدادات</div>
-            <div className="settings-sub">اضبط عملة الأسعار ورابط Google Sheets الخاص بك</div>
+            <div className="settings-sub">اختر العملة المستخدمة في عرض التقارير والفواتير</div>
 
             <label className="settings-label">العملة</label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", marginBottom: "1rem", maxHeight: "180px", overflowY: "auto", padding: "2px" }}>
@@ -1356,24 +1373,8 @@ export default function InventoryScannerPage() {
               <span>العملة المختارة: <strong style={{ color: "#60a5fa" }}>{currency.name} ({currency.symbol})</strong></span>
             </div>
 
-            <label className="settings-label">Spreadsheet ID</label>
-            <input
-              className="settings-input"
-              placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-              value={spreadsheetId}
-              onChange={(e) => setSpreadsheetId(e.target.value)}
-              dir="ltr"
-            />
-
-            <div className="settings-hint">
-              📌 مثال على الرابط:<br />
-              <span style={{ color: "#475569" }}>docs.google.com/spreadsheets/d/</span>
-              <span style={{ color: "#60a5fa", fontFamily: "monospace" }}>1BxiMVs0XRA...</span>
-              <span style={{ color: "#475569" }}>/edit</span>
-            </div>
-
             <div className="settings-actions">
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSaveSettings} disabled={!spreadsheetId.trim()}>
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSaveSettings}>
                 💾 حفظ الإعدادات
               </button>
               <button className="btn btn-secondary" onClick={() => setShowSettings(false)}>إلغاء</button>
@@ -1406,7 +1407,6 @@ export default function InventoryScannerPage() {
             </span>
             <div className="settings-btn-wrap">
               <button className="btn-settings-icon" onClick={() => setShowSettings(true)} title="الإعدادات">⚙️</button>
-              {spreadsheetId && <span className="has-id-dot" />}
             </div>
           </div>
         </header>
@@ -1486,24 +1486,13 @@ export default function InventoryScannerPage() {
                 {exportSuccess ? (
                   <div className="export-success">
                     <div className="export-success-icon">🎉</div>
-                    <div className="export-success-text">تم الترحيل بنجاح!</div>
-                    <div className="export-success-sub">{result.total_products_detected} منتج تم إضافته إلى Google Sheets</div>
-                    {spreadsheetId && (
-                      <button className="btn btn-primary" style={{ marginTop: "1rem", width: "auto", fontSize: "0.85rem" }} onClick={() => window.open(`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`, "_blank")}>
-                        📄 فتح جدول البيانات
-                      </button>
-                    )}
+                    <div className="export-success-text">تم إنشاء ملف Excel بنجاح!</div>
+                    <div className="export-success-sub">{result.total_products_detected} منتج تم تضمينها في ملف Excel</div>
                   </div>
                 ) : (
                   <>
-                    {!spreadsheetId && (
-                      <div style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: "12px", padding: "0.7rem 1rem", marginBottom: "0.75rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-                        <span style={{ fontSize: "0.78rem", color: "#d97706" }}>⚠️ لم تُضف رابط Google Sheets بعد</span>
-                        <button className="btn btn-secondary" style={{ fontSize: "0.73rem", padding: "0.35rem 0.8rem", flexShrink: 0 }} onClick={() => setShowSettings(true)}>إضافة الآن ⚙️</button>
-                      </div>
-                    )}
                     <button className="btn btn-export" onClick={handleExport} disabled={exporting || result.products.length === 0}>
-                      {exporting ? "⏳ جاري الترحيل..." : `📊 تأكيد الترحيل إلى Google Sheets (${result.total_products_detected} منتج)`}
+                      {exporting ? "⏳ جاري الترحيل..." : `📊 تنزيل تقرير Excel (${result.total_products_detected} منتج)`}
                     </button>
                     <button className="btn btn-secondary" style={{ width: "100%", justifyContent: "center", marginTop: "0.6rem", padding: "0.85rem", background: "rgba(99,102,241,0.1)", borderColor: "rgba(99,102,241,0.3)", color: "#a5b4fc", fontSize: "0.9rem" }} onClick={() => setShowInvoice(true)} disabled={result.products.length === 0}>
                       🧾 إنشاء فاتورة احترافية PDF

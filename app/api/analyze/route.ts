@@ -246,7 +246,7 @@ async function withTimeout<T>(
   timeoutMs: number,
   errorMessage: string
 ): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
+  let timeoutId: NodeJS.Timeout | undefined;
   
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -255,7 +255,7 @@ async function withTimeout<T>(
   try {
     return await Promise.race([promise, timeoutPromise]);
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -315,10 +315,17 @@ async function convertAndOptimizeImage(
   }
   
   try {
-    let sharpInstance = sharp(buffer);
+    let sharpInstance = sharp(buffer, { limitInputPixels: 40_000_000 });
     
     // تغيير الحجم إذا كان كبيراً
     const metadata = await sharpInstance.metadata();
+    const supportedDecodedFormats = new Set(["jpeg", "png", "webp", "gif", "bmp", "tiff", "heif"]);
+    if (!metadata.format || !supportedDecodedFormats.has(metadata.format)) {
+      throw new Error("Unsupported decoded image format");
+    }
+    if (metadata.width && metadata.height && metadata.width * metadata.height > 40_000_000) {
+      throw new Error("Image dimensions exceed the pixel limit");
+    }
     if (metadata.width && metadata.height) {
       if (metadata.width > maxWidth || metadata.height > maxHeight) {
         sharpInstance = sharpInstance.resize(maxWidth, maxHeight, {
@@ -430,7 +437,7 @@ function extractJSON<T>(raw: string): T {
       return JSON.parse(fixed);
     } catch (secondError) {
       console.error("[JSON] Failed to parse:", text.substring(0, 200));
-      throw new Error(`Invalid JSON format: ${firstError.message}`);
+      throw new Error(`Invalid JSON format: ${firstError instanceof Error ? firstError.message : String(firstError)}`);
     }
   }
 }
@@ -693,6 +700,11 @@ Be strict: only return valid JSON, no other text.`;
 // ──────────────────────────────────────────────────────────────
 
 function buildMasterPrompt(ctx: GeoContext): string {
+  const batch_id = `batch-${Date.now()}`;
+  const image_id = `image-${Date.now()}`;
+  const timestamp = new Date().toISOString();
+  const previous_scan_context = "غير متاح — لا توجد جلسة سابقة مرفقة";
+  const planogram_reference = "غير متاح — لا توجد خطة رف مرفقة";
   const lang       = ctx.lang === "ar" ? "العربية الفصحى" : "English";
   const currency   = ctx.currency.code;
   const symbol     = ctx.currency.symbol;
@@ -1077,24 +1089,40 @@ function processImageInput(image: string): { base64: string; mimeType: string } 
 // 16. PRODUCT SANITIZER
 // ──────────────────────────────────────────────────────────────
 
-function sanitizeProduct(raw: any, lang: "ar" | "en"): ProductItem {
+function sanitizeProduct(raw: any, lang: "ar" | "en", index: number): ProductItem {
   const unknownLabel = lang === "ar" ? "منتج غير معروف" : "Unknown Product";
   const generalLabel = lang === "ar" ? "عام" : "General";
-
   const confidence: Confidence =
-    ["high", "medium", "low"].includes(raw.confidence) ? raw.confidence : "medium";
+    ["high", "medium", "low"].includes(raw?.confidence) ? raw.confidence : "medium";
+  const rawQuantity = typeof raw?.visible_quantity === "number"
+    ? raw.visible_quantity
+    : typeof raw?.quantity === "number" ? raw.quantity : 0;
+  const confidenceScore = typeof raw?.confidence_score === "number" && Number.isFinite(raw.confidence_score)
+    ? Math.max(0, Math.min(1, raw.confidence_score))
+    : confidence === "high" ? 0.9 : confidence === "medium" ? 0.7 : 0.4;
+  const fallback = Number.isInteger(raw?.fallback_level) && raw.fallback_level >= 1 && raw.fallback_level <= 5
+    ? raw.fallback_level : 5;
+  const detection = ["ocr_only", "visual_match", "barcode_match", "multimodal_match"].includes(raw?.detection_method)
+    ? raw.detection_method : "multimodal_match";
 
   return {
-    product_name:   sanitize(raw.product_name || unknownLabel, 300),
-    brand:          raw.brand ? sanitize(raw.brand, 150) : null,
-    category:       sanitize(raw.category || generalLabel, 150),
-    unit_price:     null,
-    quantity:       typeof raw.quantity === "number" && raw.quantity > 0
-                      ? Math.floor(raw.quantity)
-                      : 1,
-    barcode_serial: raw.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
+    id: index,
+    product_name: sanitize(raw?.product_name || unknownLabel, 300),
+    brand: raw?.brand ? sanitize(raw.brand, 150) : null,
+    category: sanitize(raw?.category || generalLabel, 150),
+    unit_price: null,
+    quantity: Number.isFinite(rawQuantity) && rawQuantity >= 0 ? Math.floor(rawQuantity) : 0,
+    barcode_serial: raw?.barcode_serial ? sanitize(raw.barcode_serial, 100) : null,
     confidence,
-    notes:          sanitize(raw.notes || "", 800),
+    notes: sanitize(raw?.notes || "", 800),
+    fallback_level: fallback,
+    detection_method: detection,
+    confidence_score: confidenceScore,
+    image_region: sanitize(raw?.image_region || "unknown", 40),
+    is_estimated: raw?.quantity_is_estimated === true || raw?.is_estimated === true,
+    compliance_flags: Array.isArray(raw?.compliance_flags)
+      ? raw.compliance_flags.filter((flag: unknown) => typeof flag === "string").slice(0, 20).map((flag: string) => sanitize(flag, 80))
+      : [],
   };
 }
 
@@ -1121,13 +1149,23 @@ export async function POST(request: NextRequest) {
   }
 
   let body: {
-    image?:           string;
-    fetch_prices?:    boolean;
+    image?: string;
+    fetch_prices?: boolean;
     country_override?: string;
   };
 
   try {
-    body = await request.json();
+    const rawBody = await request.text();
+    if (Buffer.byteLength(rawBody, "utf8") > MAX_BODY_BYTES) {
+      return NextResponse.json(
+        { success: false, error: `حجم الطلب كبير جداً. الحد الأقصى ${MAX_BODY_BYTES / 1e6}MB.` },
+        { status: 413 }
+      );
+    }
+    body = JSON.parse(rawBody);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("Invalid request body");
+    }
   } catch {
     return NextResponse.json(
       { success: false, error: "الطلب غير صالح — يجب أن يكون JSON." },
@@ -1135,7 +1173,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { image, fetch_prices = true, country_override } = body;
+  const { image, fetch_prices = false, country_override } = body;
 
   if (!image || typeof image !== "string") {
     return NextResponse.json(
@@ -1146,8 +1184,12 @@ export async function POST(request: NextRequest) {
 
   const ctx = await resolveGeoContext(request, country_override);
 
-  // معالجة الصورة الأولية
+  // معالجة الصورة الأولية مع السماح بصيغ الصور النقطية فقط.
   let { base64, mimeType } = processImageInput(image);
+  const allowedRasterTypes = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif", "image/bmp", "image/tiff", "image/tif", "image/heic", "image/heif", "image/avif"]);
+  if (!allowedRasterTypes.has(mimeType.toLowerCase())) {
+    return NextResponse.json({ success: false, error: "نوع الصورة غير مدعوم." }, { status: 415 });
+  }
 
   if (!validateBase64(base64)) {
     return NextResponse.json(
@@ -1231,7 +1273,7 @@ export async function POST(request: NextRequest) {
 
   // تنقية المنتجات
   const rawProducts: any[] = Array.isArray(parsedAI.products) ? parsedAI.products : [];
-  let products: ProductItem[] = rawProducts.map(p => sanitizeProduct(p, ctx.lang));
+  let products: ProductItem[] = rawProducts.map((p, index) => sanitizeProduct(p, ctx.lang, index + 1));
 
   // جلب الأسعار
   let pricesFetched = false;
@@ -1282,6 +1324,7 @@ export async function POST(request: NextRequest) {
     business_type: sanitize(parsedAI.business_type ?? (ctx.lang === "ar" ? "مخزون عام" : "General Inventory"), 100),
     analysis_quality: analysisQuality,
     detected_items_count: products.length,
+    total_products_detected: products.length,
     products: products.map(p => ({
       ...p,
       _editable_fields: ["quantity", "unit_price", "product_name", "notes"]
@@ -1335,7 +1378,7 @@ export async function POST(request: NextRequest) {
         original_format: mimeType
       },
       supported_features: {
-        all_image_formats: true,
+        all_image_formats: false,
         auto_conversion: true,
         price_caching: true,
         quality_analysis: !!qualityAnalysis
@@ -1368,12 +1411,13 @@ export async function GET(request: NextRequest) {
     },
     features: {
       auto_geo_detection: true,
-      live_market_prices: true,
-      batch_price_fetching: true,
+      live_market_prices: false,
+      batch_price_fetching: false,
+      optional_model_price_estimates: true,
       deduplication: true,
       exponential_backoff: true,
       arabic_first: true,
-      zero_hallucination: true,
+      zero_hallucination: false,
       manual_editing_support: true,
       all_image_formats: true,
       auto_image_conversion: true,
@@ -1382,7 +1426,7 @@ export async function GET(request: NextRequest) {
     },
     supported_image_formats: [
       "JPEG", "PNG", "WebP", "GIF", "BMP", 
-      "TIFF", "HEIC", "HEIF", "AVIF", "SVG"
+      "TIFF", "HEIC", "HEIF", "AVIF"
     ],
     detected_context: {
       country: ctx.countryNameEn,

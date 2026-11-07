@@ -6,26 +6,30 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@types/react": "18.2.22",
-    "@types/react-dom": "18.2.7",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
     "autoprefixer": "10.4.15",
-    "eslint": "8.49.0",
-    "eslint-config-next": "13.5.1",
+    "eslint": "9.39.1",
+    "eslint-config-next": "16.4.5",
     "exceljs": "^4.4.0",
-    "next": "13.5.1",
+    "next": "16.4.5",
     "pdf-lib": "^1.17.1",
-    "postcss": "8.4.30",
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
-    "sharp": "^0.34.5",
+    "postcss": "8.5.23",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "sharp": "^0.35.5",
     "tailwindcss": "3.3.3",
     "typescript": "5.2.2"
   },
   "devDependencies": {
     "@types/node": "^25.6.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "minimatch": "^11.0.1"
   }
 }

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "fix/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Runtime smoke tests
+        run: |
+          node <<'NODE'
+          const ExcelJS = require("exceljs");
+          const sharp = require("sharp");
+          (async () => {
+            const workbook = new ExcelJS.Workbook();
+            const sheet = workbook.addWorksheet("Smoke");
+            sheet.addRow(["export", "works"]);
+            const excelBuffer = await workbook.xlsx.writeBuffer();
+            if (!excelBuffer.byteLength) throw new Error("ExcelJS produced an empty workbook");
+            const imageBuffer = await sharp({
+              create: { width: 2, height: 2, channels: 3, background: "#ffffff" }
+            }).png().toBuffer();
+            if (!imageBuffer.length) throw new Error("Sharp produced an empty image");
+            console.log("ExcelJS and Sharp runtime smoke tests passed.");
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - name: Audit dependencies
+        run: npm audit
+      - name: Lint
+        run: npm run lint
+      - name: Type-check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+        env:
+          GEMINI_API_KEY: ci-placeholder
+          NEXT_PUBLIC_SITE_URL: https://example.invalid
