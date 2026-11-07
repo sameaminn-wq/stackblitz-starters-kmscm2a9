@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-// تأكد أيضاً من استيراد useEffect إذا كنت تستخدم isMounted
 
 // ============================================================
 // Types (متوافقة مع الـ API Route)
@@ -857,7 +856,7 @@ function InvoiceModal({
     clientAddress: "",
     companyName: "",
     companyLogo: "",
-    invoiceNumber: `INV-${Date.now().toString().slice(-6)}`,
+    invoiceNumber: "",
     invoiceDate: today,
     notes: "",
     taxPercent: 0,
@@ -886,7 +885,7 @@ function InvoiceModal({
   };
 
   const handleGenerate = () => {
-    const safeInfo = { ...info, taxPercent: Math.min(100, Math.max(0, Number(info.taxPercent) || 0)), discountPercent: Math.min(100, Math.max(0, Number(info.discountPercent) || 0)) };
+    const safeInfo = { ...info, invoiceNumber: info.invoiceNumber.trim() || `INV-${Date.now().toString().slice(-6)}`, taxPercent: Math.min(100, Math.max(0, Number(info.taxPercent) || 0)), discountPercent: Math.min(100, Math.max(0, Number(info.discountPercent) || 0)) };
     const html = generateInvoiceHTML(safeInfo, products, currency);
     const win = window.open("", "_blank");
     if (win) { win.document.write(html); win.document.close(); }
@@ -1055,7 +1054,6 @@ function InvoiceModal({
 // Main Component - هذه هي الصفحة الرئيسية
 // ============================================================
 export default function InventoryScannerPage() {
-  const [isMounted, setIsMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -1067,11 +1065,10 @@ export default function InventoryScannerPage() {
   const [showInvoice, setShowInvoice] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
     const savedCurrency = localStorage.getItem("inv_currency");
     if (savedCurrency) {
       const found = CURRENCIES.find((c) => c.code === savedCurrency);
-      if (found) setCurrency(found);
+      if (found) window.setTimeout(() => setCurrency(found), 0);
     }
   }, []);
 
@@ -1228,8 +1225,6 @@ export default function InventoryScannerPage() {
   };
 
   const highConfidence = result?.products.filter((p) => p.confidence === "high").length ?? 0;
-
-  if (!isMounted) return null;
 
   return (
     <>
